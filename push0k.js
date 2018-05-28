@@ -92,7 +92,7 @@ function caughtErr(description, err, errobj) {
         ServerDate = new Date;
         var mesid = new_uuid();
         mesid = mesid.substring(0, 8) + '-' + mesid.substring(8, 12) + '-' + mesid.substring(12, 16) + '-' + mesid.substring(16, 20) + '-' + mesid.substring(20, 32);
-        var data = { event: "sendToRoom", mesid: mesid, date: ServerDate.toISOString(), roomid: config.errlogroom, datatype: 3, userid: UserId, destid: null, message: encodeURIComponent(description + " <br> " + err + " <br> " + errobj), extdata: "", baseid: BaseId, devtype: 0, info: Info, parentid: "" };
+        var data = { event: "sendMessage", mesid: mesid, date: ServerDate.toISOString(), roomid: config.errlogroom, datatype: 3, userid: UserId, destid: null, message: encodeURIComponent(description + " <br> " + err + " <br> " + errobj), extdata: "", baseid: BaseId, devtype: 0, info: Info, parentid: "" };
         io.of('/').to(data.roomid).binary(false).emit('message', JSON.stringify(data));
 
         pool.query("INSERT INTO messages (tmstamp, userid, destid, mesid, roomid, message, datatype, extdata, devtype,datasize, conid) \
@@ -467,7 +467,7 @@ function forwardmessage(data, socket){
 
     pgquery(querytext, queryparams).then(result => {
         if (result.length) {
-            data.event = (data.destid == '' ? "sendToRoom" : "sendMessage");
+            data.event = "sendMessage";
             data.message = encodeURIComponent(result[0].message);
             data.extdata = encodeURIComponent(result[0].extdata);
             data.parentid = result[0].parentid;
@@ -764,9 +764,6 @@ io.sockets.on('connection', (socket) => {
         if (data.event == 'getProcessStatistic') {
             if (usersList[socket.id].pushadmin)
                 setTimeout(getProcessStatistic, 1000, socket.id);
-
-        //} else if (data.event == 'sendToRoom') {
-            //sendToRoom(data, socket);
         } else if (data.event == 'atachData') {
             atachData(data, socket, msg);
         } else if (data.event == 'getData' || data.event == 'getDataSin') {
