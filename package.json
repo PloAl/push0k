@@ -7,6 +7,10 @@
   "author": {
     "name": "PloAl"
   },
+  "repository" : {     
+    "type" : "git",
+     "url" : "https://github.com/ploal/push0k.git" 
+  },
   "dependencies": {
     "pg": "^7.4.1",
     "pm2": "^2.10.2",
