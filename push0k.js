@@ -596,25 +596,34 @@ function setPas(data, socket) {
                     release();
                     return caughtErr('Неудачное изменение пароля', 'неверный пароль', '');
                 }
-                fs.writeFileSync(config.atachCatalog + data.id + '.zip', Buffer.from(data.npas, 'hex'));
-                const cp = require('child_process');
-                var uzip = cp.spawn("7z", ["e", "-p" + result.rows[0].pwd.replace(/([ ])/g, "") + data.id, "-o" + config.atachCatalog.replace(/\\/g, "/"), "-mem=AES256", (config.atachCatalog + data.id + ".zip").replace("\\", "/")], (process.platform.substr(0, 7) == "Windows" ? { "cwd": "C:/Program Files/7-Zip/" } : {}));
-                uzip.on('close',async () => {
-                    var npas = fs.readFileSync("" + config.atachCatalog + data.fname, 'utf8');
-                    if (npas.length == 96 && npas.charCodeAt(0) == 65279)
-                        npas = npas.substr(1);
+                if (socket.handshake.headers["user-agent"].startsWith('WebSocket++')) {
+                    fs.writeFileSync(config.atachCatalog + data.id + '.zip', Buffer.from(data.npas, 'hex'));
+                    const cp = require('child_process');
+                    var uzip = cp.spawn("7z", ["e", "-p" + result.rows[0].pwd.replace(/([ ])/g, "") + data.id, "-o" + config.atachCatalog.replace(/\\/g, "/"), "-mem=AES256", (config.atachCatalog + data.id + ".zip").replace("\\", "/")], (process.platform.substr(0, 7) == "Windows" ? { "cwd": "C:/Program Files/7-Zip/" } : {}));
+                    uzip.on('close',async () => {
+                        var npas = fs.readFileSync("" + config.atachCatalog + data.fname, 'utf8');
+                        if (npas.length == 96 && npas.charCodeAt(0) == 65279)
+                            npas = npas.substr(1);
+                        await pgquery("UPDATE userscat SET pwd = $1, tmppwd = $2 WHERE refid = $3::uuid", [npas, "", data.userid]);
+                        release();
+                        io.sockets.connected[socket.id].binary(false).emit('message', '{"event":"SetPasConfirm","id":"' + socket.id + '"}');
+                        if (fs.existsSync("" + config.atachCatalog + data.fname))
+                            fs.unlink("" + config.atachCatalog + data.fname);
+
+                        if (fs.existsSync("" + config.atachCatalog + data.id + '.zip'))
+                            fs.unlink("" + config.atachCatalog + data.id + '.zip');
+                    });
+                    uzip.on('error', function (err) {
+                        caughtErr('Ошибка изменения пароля', err, '');
+                    });
+                } else {
+                    var decipher = crypto.createDecipher('aes256', result.rows[0].pwd.replace(/([ ])/g, "") + data.id);
+                    var npas = decipher.update(data.npas,'hex','utf8');
+                    npas += decipher.final('utf8');
                     await pgquery("UPDATE userscat SET pwd = $1, tmppwd = $2 WHERE refid = $3::uuid", [npas, "", data.userid]);
                     release();
                     io.sockets.connected[socket.id].binary(false).emit('message', '{"event":"SetPasConfirm","id":"' + socket.id + '"}');
-                    if (fs.existsSync("" + config.atachCatalog + data.fname))
-                        fs.unlink("" + config.atachCatalog + data.fname);
-
-                    if (fs.existsSync("" + config.atachCatalog + data.id + '.zip'))
-                        fs.unlink("" + config.atachCatalog + data.id + '.zip');
-                });
-                uzip.on('error', function (err) {
-                    caughtErr('Ошибка изменения пароля', err, '');
-                });
+                }
             }
         } catch (err) {
             release();
