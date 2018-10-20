@@ -547,7 +547,8 @@ function dataConfirm(data, socket) {
         }
         try {
             var querytext = "UPDATE connections SET contime=$3, auftime=$4, datasintime=$5, datasize=$6 WHERE dateoff IS NULL AND conid = $1 AND userid = $2;";
-            var paramaray = [socket.id, data.userid, data.contime, data.auftime, data.datasintime, data.datasize];
+            var contime = data.contime > 99999 ? 99999 : data.contime;
+            var paramaray = [socket.id, data.userid, contime, data.auftime, data.datasintime, data.datasize];
             await client.query(querytext, paramaray);
             if (!data.datasize)
                 return release();
