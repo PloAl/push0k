@@ -652,9 +652,9 @@ function GetAtach(data, socket) {
         var filecontent = JSON.parse(contents);
 
         if (data.FilePart < filecontent.PartsCount) {
-            socket.binary(false).emit('atachDataPart', filecontent.mesid + filecontent.FilePart + ":" + filecontent.PartsCount + ";" + filecontent.binary);
+            socket.compress(false).binary(false).emit('atachDataPart', filecontent.mesid + filecontent.FilePart + ":" + filecontent.PartsCount + ";" + filecontent.binary);
         } else {
-            socket.binary(false).emit('atachDataPart', filecontent.mesid + filecontent.FilePart + ":" + filecontent.PartsCount + ";" + filecontent.binary);
+            socket.compress(false).binary(false).emit('atachDataPart', filecontent.mesid + filecontent.FilePart + ":" + filecontent.PartsCount + ";" + filecontent.binary);
             filecontent.binary = "";
             filecontent.event = "dowmloadAtach";
             socket.binary(false).emit('message', JSON.stringify(filecontent));
