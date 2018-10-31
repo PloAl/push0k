@@ -670,7 +670,7 @@ function changeUser(data, socket) {
         if (result.length) {
             data.event = 'confirmChangeUser';
             data.changestamp = result[0].changestamp;
-            socket.broadcast.binary(false).emit('message', JSON.stringify(data));
+            socket.binary(false).emit('message', JSON.stringify(data));
         }
     }).catch(err => { caughtErr('Error executing changeUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); });
 }
