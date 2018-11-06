@@ -671,6 +671,7 @@ function changeUser(data, socket) {
             data.event = 'confirmChangeUser';
             data.changestamp = result[0].changestamp;
             socket.binary(false).emit('message', JSON.stringify(data));
+            sendAnotherProcess(data); // add send user changes to another process and some fix
         }
     }).catch(err => { caughtErr('Error executing changeUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); });
 }
@@ -852,14 +853,16 @@ io.sockets.on('connection', (socket) => {
 
 process.on('message', function (packet) {
     var data = packet.data.message;
-    if (data.event == "userAdd" || data.event == "userSplit" || data.event == "sendMessage" || data.event == "atachData") {
+    if ((data.event == "sendMessage" && data.roomid == "") || (data.event == "atachData" && data.roomid == "")) {
         for (var key in usersList) {
             if ((usersList[key].userid == data.userid || usersList[key].userid == data.destid) && typeof io.sockets.connected[key] != 'undefined')
                 io.sockets.connected[key].binary(false).emit('message', JSON.stringify(data));
         }
     } else if (data.event == "confirmChangeRoom") {
         checkRoomUsers(data);
-    } else {
+    } else if (data.event == "userAdd" || data.event == "userSplit" || data.event == "confirmChangeUser") {
+        io.sockets.emit('message', data);    
+    } else if ((data.event == "sendMessage" && data.roomid != "") || (data.event == "atachData" && data.roomid != "")) {
         if (typeof io.sockets.adapter.rooms != 'undefined' && typeof io.sockets.adapter.rooms[data.roomid] != 'undefined')
             io.of('/').to(data.roomid).binary(false).emit('message', JSON.stringify(data));
     }
