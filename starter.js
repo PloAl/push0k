@@ -1,7 +1,7 @@
 var config = require('./config');
 var starterConfig = require('./starter_cfg');
 var crypto = require('crypto');
-var http = require('http');
+var server = {};
 var fs = require('fs');
 var connectionId = "";
 var os = require('os');
@@ -235,7 +235,7 @@ async function serverFunc(data,client,release,res,userid,result,ip) {
     }
 }
 
-var server = http.createServer(function (req, res) {
+var requestListener = (req, res) => {
 
     var body = [];
     req.on('error', function (err) {
@@ -281,8 +281,26 @@ var server = http.createServer(function (req, res) {
         });
 
     });
-});
-server.listen(config.aport);
+};
+
+if (!starterConfig.https) {
+    server = require('http').createServer(requestListener).listen(starterConfig.port);
+} else {
+    var tls = require('tls');
+    if (starterConfig.rejectUnauthorized) {
+        var certs = {};
+        certs[starterConfig.hostname] = { secureProtocol: "TLSv1_2_method", key: fs.readFileSync(starterConfig.key), cert: fs.readFileSync(starterConfig.cert), ca: fs.readFileSync(starterConfig.ca), requestCert: starterConfig.requestCert, rejectUnauthorized: starterConfig.rejectUnauthorized };
+        var httpsOptions = { SNICallback: function (hostname, cb) { var ctx = tls.createSecureContext(certs[hostname]); cb(null, ctx); } };
+        server = require('https').createServer(httpsOptions, requestListener);
+    } else {
+        if (starterConfig.ca != '') {
+            server = require('https').createServer({ key: fs.readFileSync(starterConfig.key), cert: fs.readFileSync(starterConfig.cert), ca: fs.readFileSync(starterConfig.ca), requestCert: true, rejectUnauthorized: starterConfig.rejectUnauthorized }, requestListener);
+        } else {
+            server = require('https').createServer({ key: fs.readFileSync(starterConfig.key), cert: fs.readFileSync(starterConfig.cert), requestCert: false, rejectUnauthorized: starterConfig.rejectUnauthorized }, requestListener);
+        }
+    }
+    server.listen(starterConfig.port);
+}
 
 if (config.autostart) {
     pm2.start({
