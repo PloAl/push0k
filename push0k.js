@@ -1,5 +1,5 @@
 var config = require('./config');
-
+var starterConfig = require('./starter_cfg');
 var auf_clients = [];
 var bunList = [];
 var usersList = {};
@@ -20,7 +20,7 @@ var io = {};
 var ServerDate = new Date();
 const htmlEscape = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '/': '&#x2F;', '`': '&#x60;', '=': '&#x3D;' };
 const { Pool } = require('pg');
-const pool = new Pool(config.pgconf);
+const pool = new Pool(starterConfig.pgconf);
 const socketioVersion = require("socket.io/package").version;
 const inspector = require('inspector');
 

@@ -1,4 +1,5 @@
 var config = require('./config');
+var starterConfig = require('./starter_cfg');
 var crypto = require('crypto');
 var http = require('http');
 var fs = require('fs');
@@ -10,7 +11,7 @@ var versions = { nodejs: "", postgreSQL: "", pg: "", socketio: "", pm2: "", push
 try {
     versions.pg = require("pg/package").version;
     const { Pool } = require('pg');
-    var pool = new Pool(config.pgconf);
+    var pool = new Pool(starterConfig.pgconf);
 } catch (err) {
     versions.pgErr = true;
 }
@@ -61,7 +62,7 @@ function checkConnection(res, trycount) {
             release();
             pool.end();
             const { Pool } = require('pg');
-            pool = new Pool(config.pgconf);
+            pool = new Pool(starterConfig.pgconf);
             saveconfig(res);
             if (!trycount)
                 checkResult = checkConnection(res, trycount + 1);
