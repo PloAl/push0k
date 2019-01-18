@@ -1,19 +1,19 @@
 {
   "name": "push0k",
-  "version": "18.05.1",
+  "version": "19.01.11",
   "description": "push0k",
   "main": "starter.js",
   "license": "MIT",
   "author": {
     "name": "PloAl"
   },
-  "repository" : {     
-    "type" : "git",
-     "url" : "https://github.com/PloAl/push0k"
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PloAl/push0k"
   },
   "dependencies": {
-    "pg": "^7.4.1",
-    "pm2": "^2.10.2",
-    "socket.io": "^2.1.0"
+    "pg": "^7.7.1",
+    "pm2": "^3.2.4",
+    "socket.io": "^2.2.0"
   }
 }

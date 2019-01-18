@@ -1,10 +1,10 @@
 var config = {
 	"port": 2016,
-	"https": false,
-    "rejectUnauthorized": false,
-    "key": "privkey.pem",
-    "cert": "cert.pem",
-    "ca": "chain.pem",
+	"https": true,
+    "rejectUnauthorized": true,
+    "key": "privkey_.pem",
+    "cert": "cert_.pem",
+    "ca": "chain_.pem",
     "hostname": "push0k.ru",
 	"pgconf": {
         "user": "postgres",

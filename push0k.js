@@ -1,13 +1,12 @@
 var config = require('./config');
 var starterConfig = require('./starter_cfg');
-var auf_clients = [];
-var bunList = [];
-var usersList = {};
+const auf_users = new Map(); 
+var bunList = new Map();
 var fs = require('fs');
 var os = require('os');
 var crypto = require('crypto');
-var pmx = require('pmx').init({ network: true, ports: true });
-var probe = pmx.probe();
+var probe = require('@pm2/io');
+probe.init({ metrics: {network: { traffic: true, ports: false }, deepMetrics: {socketio: true, redis: false, http: true, https: true, "http-outbound": true, "https-outbound": true}}});
 var cur_socketid = "";
 var cur_ip = "";
 var data;
@@ -26,14 +25,14 @@ const inspector = require('inspector');
 
 pm2.connect(function (err) {
     if (err) {
-        console.error(err);
+        console.error(JSON.stringify({message: err, timestamp: new Date(), type: 'err', process_id: process.env.NODE_APP_INSTANCE, app_name: 'push0k'}));
         process.exit(2);
     }
 });
 
 if (!config.https) {
-    var httpServer = require('http').createServer().listen(config.port, { wsEngine: config.wsEngine });
-    io = require('socket.io')(httpServer, { pingInterval: config.pingInterval, pingTimeout: config.pingTimeout, wsEngine: config.wsEngine });
+    var httpServer = require('http').createServer().listen(config.port);
+    io = require('socket.io')(httpServer, { pingInterval: config.pingInterval, pingTimeout: config.pingTimeout });
 } else {
     var tls = require('tls');
     if (config.rejectUnauthorized) {
@@ -69,22 +68,24 @@ async function pgquery(textquery, paramsarr) {
 
 function caughtErr(description, err, errobj) {
     if (config.writelogerrfiles) {
-        console.error(description, err, errobj);
+        console.error(JSON.stringify({message: description + err + errobj, timestamp: new Date(), type: 'err', process_id: process.env.NODE_APP_INSTANCE, app_name: 'push0k'}));
     }
-    var UserId = null;
-    var BaseId = null;
-    var Info = "";
-    if (typeof usersList[cur_socketid] != 'undefined') {
-        UserId = usersList[cur_socketid].userid;
-        BaseId = usersList[cur_socketid].baseid;
-        Info = usersList[cur_socketid].info;
+    let user = {};
+    let UserId = "00000000-0000-0000-0000-000000000000";
+    let BaseId = null;
+    let Info = "";
+    if (auf_users.has(cur_socketid)) {
+        user = auf_users.get(cur_socketid);
+        UserId = user.userid;
+        BaseId = user.baseid;
+        Info = user.info;
     }
     if (config.writelogerrtable) {
 
         pool.query("INSERT INTO logs (tmstamp, logtype, logid, description, ipadress, userid, conid) VALUES (current_timestamp, $1, $2::uuid, $3, $4, $5::uuid, $6);",
             [3, new_uuid(), "Ошибка!!! " + description + "\r\n Ошибка: " + err + (errobj == "" ? "" : "\r\n" + errobj), cur_ip, UserId, cur_socketid], (err) => {
                 if (err) {
-                    console.error("Error errsave query ", err, errobj);
+                    console.error(JSON.stringify({message: "Error errsave query: " + err + errobj, timestamp: new Date(), type: 'err', process_id: process.env.NODE_APP_INSTANCE, app_name: 'push0k'}));
                 }
             });
     }
@@ -99,7 +100,7 @@ function caughtErr(description, err, errobj) {
                          VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, 0, $10); ",
             [ServerDate, data.userid, data.destid, data.mesid, data.roomid, decodeURIComponent(data.message), data.datatype, decodeURIComponent(data.extdata), data.devtype, cur_socketid], (err) => {
                 if (err) {
-                    console.error("Error err add message query ", err, errobj);
+                    console.error(JSON.stringify({message: "Error err add message query: " + err + errobj, timestamp: new Date(), type: 'err', process_id: process.env.NODE_APP_INSTANCE, app_name: 'push0k'}));
                 }
             });
         sendAnotherProcess(data);
@@ -108,14 +109,14 @@ function caughtErr(description, err, errobj) {
 
 function datasinc(data) {
 
-    var usersquery = "SELECT * FROM (SELECT catusers.refid as userid, catusers.marked, catusers.number as code, catusers.description as name, catusers.icon as icon, catusers.usersign as sign,CASE WHEN usercontact.changestamp > catusers.changestamp THEN usercontact.changestamp ELSE catusers.changestamp END as changestamp, usercontact.description as description, usercontact.blocknotifications, usercontact.blockmessages FROM (SELECT userid, contactid, description, blocknotifications, blockmessages, changestamp  FROM users_contacts WHERE userid = $1::uuid) as usercontact LEFT JOIN userscat as catusers ON (usercontact.contactid = catusers.refid)) as users WHERE users.changestamp > $2";
-    var roomsquery = "SELECT refid as roomid, marked, code, description as name,icon as icon, extdesc as description, roomtype, changestamp, users as users FROM public.roomscat WHERE refid IN (SELECT roomid as roomid FROM users_roomscat WHERE userid = $1::uuid) and  changestamp > $2;";
+    var usersquery = "SELECT * FROM (SELECT catusers.refid as userid, catusers.marked, catusers.number as code, catusers.description as name, catusers.icon as icon, catusers.usersign as sign,CASE WHEN usercontact.changestamp > catusers.changestamp THEN usercontact.changestamp ELSE catusers.changestamp END as changestamp, usercontact.description as description, usercontact.blocknotifications, usercontact.blockmessages FROM (SELECT userid, contactid, description, blocknotifications, blockmessages, changestamp  FROM users_contacts WHERE userid = $1::uuid) as usercontact LEFT JOIN userscat as catusers ON (usercontact.contactid = catusers.refid)) as users WHERE users.changestamp > $2::timestamptz";
+    var roomsquery = "SELECT refid as roomid, marked, code, description as name,icon as icon, extdesc as description, roomtype, changestamp, users as users FROM public.roomscat WHERE refid IN (SELECT roomid as roomid FROM users_roomscat WHERE userid = $1::uuid) and  changestamp > $2::timestamptz;";
     var messquery = "SELECT messages.mesid as mesid,destid as destid, messages.userid as userid, roomid as roomid, tmstamp as date, datatype, datasize, message, extdata, devtype, coalesce(coninfo.info,'') as info, parentid, \
                             CASE WHEN (roomid IS NULL AND messages.userid = $1::uuid) THEN destid WHEN (roomid IS NULL AND destid = $1::uuid) THEN messages.userid ELSE roomid END as orfield, \
                             CASE WHEN messreaded.mesid IS NULL AND $1::uuid NOT IN (destid, messages.userid) THEN FALSE WHEN messreaded.readed = 0 THEN FALSE ELSE TRUE END as readed \
-                        FROM messages LEFT JOIN (SELECT mesid, MAX(logtype) as readed FROM notifications WHERE tmstamp > $2 AND userid = $1 AND logtype = 1 GROUP BY mesid) as messreaded ON (messages.mesid = messreaded.mesid)\
+                        FROM messages LEFT JOIN (SELECT mesid, MAX(logtype) as readed FROM notifications WHERE tmstamp > $2::timestamptz AND userid = $1 AND logtype = 1 GROUP BY mesid) as messreaded ON (messages.mesid = messreaded.mesid)\
                         LEFT JOIN (SELECT connections.conid, devicecat.description || ' :  ' || basescat.description || ' (' || basescat.baseversion || ')' as info FROM connections LEFT JOIN devicecat ON (connections.usrdevid = devicecat.refid) LEFT JOIN basescat ON (connections.baseid = basescat.refid)) as coninfo ON (messages.conid = coninfo.conid)\
-                        WHERE (roomid IN (SELECT roomid as roomid FROM users_roomscat WHERE userid = $1::uuid) OR $1::uuid IN (messages.userid,destid)) AND datatype != 6 AND tmstamp > $2 ORDER BY orfield, date";
+                        WHERE (roomid IN (SELECT roomid as roomid FROM users_roomscat WHERE userid = $1::uuid) OR $1::uuid IN (messages.userid,destid)) AND datatype != 6 AND tmstamp > $2::timestamptz ORDER BY orfield, date";
 
     var qmessparams = [data.userid, data.lastdatesinc];
 
@@ -125,10 +126,10 @@ function datasinc(data) {
         pgquery("SELECT userid as userid,dateon,baseid,substr(conid,1,6) as id FROM public.connections WHERE dateoff IS NULL", []),
         pgquery(messquery, qmessparams)
     ]).then(qresults => {
-
+        let user = auf_users.get(cur_socketid);
         var dataid = new_uuid();
         var curDate = new Date();
-        var resultdata = '{"Users":' + JSON.stringify(qresults[0]) + ',"Rooms": ' + JSON.stringify(qresults[1]) + ',"joinedRooms": ' + JSON.stringify(usersList[cur_socketid].rooms) + ',"Mess": ' + JSON.stringify(qresults[3]) + ',"Cons": ' + JSON.stringify(qresults[2]) + '}';
+        var resultdata = '{"Users":' + JSON.stringify(qresults[0]) + ',"Rooms": ' + JSON.stringify(qresults[1]) + ',"joinedRooms": ' + JSON.stringify(user.rooms) + ',"Mess": ' + JSON.stringify(qresults[3]) + ',"Cons": ' + JSON.stringify(qresults[2]) + '}';
         var resultText = '{"event": "datasync", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"messcount": ' + qresults[3].length + ',"conscount": ' + qresults[2].length + ',"data": "' + Buffer.from(resultdata).toString("base64") + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '"}';
 
         var curDateInt = 62135596800000 + Date.now();
@@ -138,8 +139,141 @@ function datasinc(data) {
 
 }
 
-function log(logtype, description, userid, ipadress) {
-    pgquery("INSERT INTO logs (tmstamp, logtype, logid, description, ipadress, userid, conid) VALUES (current_timestamp, $1, $2::uuid, $3, $4, $5, $6);", [logtype, new_uuid(), description, ipadress, userid, cur_socketid]);
+function dataDB(data) {
+
+    var usersquery = "SELECT refid, marked, number, description, usersign, tmppwd, icon, userid, changestamp, code FROM public.userscat";
+    var roomsquery = "SELECT refid, marked, code, description, icon, extdesc, roomtype, changestamp, users FROM public.roomscat";
+    var basesquery = "SELECT refid, description, baseref, baseversion, code, marked, userid, changestamp FROM public.basescat;";
+    var devicesquery = "SELECT refid, marked, code, description, platformtype, osversion, appversion, useragentinformation, processor, memory, servercore, servercpufrequency, servercpu, userid, changestamp, senderid	FROM public.devicecat;";
+    var logsquery = "SELECT * FROM (SELECT logid, logtype, tmstamp, description, ipadress, userid, conid FROM public.logs ORDER BY tmstamp DESC LIMIT 300) as lastlogs ORDER BY tmstamp ASC;";
+    var consquery = "SELECT userscat.description as user, connections.userid as userid, conid, dateon, dateoff, basescat.description || ' (' || basescat.baseversion || ')' as base, ipadress, devicecat.description as usrdev, contime, auftime, datasintime, pg_size_pretty(datasize) as datasize, https, procid, srvdevicecat.description as server, pg_size_pretty(bytesread) as bytesread, pg_size_pretty(byteswrite) as byteswrite, useragent FROM (\
+                        SELECT userid, conid, dateon, dateoff, baseid, ipadress, usrdevid, contime, auftime, datasintime, datasize, https, procid, serverid, bytesread, byteswrite, useragent \
+                            FROM public.connections ORDER BY dateon DESC LIMIT 300 ) as connections \
+                    LEFT JOIN devicecat ON (connections.usrdevid = devicecat.refid) \
+                    LEFT JOIN devicecat AS srvdevicecat ON (connections.serverid = srvdevicecat.refid)\
+                    LEFT JOIN basescat ON (connections.baseid = basescat.refid)\
+                    LEFT JOIN userscat ON (connections.userid = userscat.refid) ORDER BY dateon ASC";
+    var datasendquery = "SELECT * FROM (SELECT tmstamp, filename, pg_size_pretty(filesize) as filesize, timems, speedmb, https, nodejsver, socketiover, datatype, upload, pg_size_pretty(diskfilesize) as diskfilesize FROM public.datasend WHERE datatype=0 ORDER BY tmstamp DESC LIMIT 300) as datasends ORDER BY tmstamp ASC;";
+    var atachmentsquery = "SELECT * FROM (SELECT tmstamp, filename, pg_size_pretty(filesize) as filesize, timems, speedmb, https, nodejsver, socketiover, datatype, upload, pg_size_pretty(diskfilesize) as diskfilesize FROM public.datasend WHERE datatype!=0 ORDER BY tmstamp DESC LIMIT 300) as datasends ORDER BY tmstamp ASC;";
+    var messagesquery = "SELECT tmstamp, userscat.description as user, destscat.description as dest, mesid, roomscat.description as room, message, datatype, extdata, devtype, datasize, conid, parentid FROM (SELECT tmstamp, userid, destid, mesid, roomid, message, datatype, extdata, devtype, datasize, conid, parentid FROM public.messages ORDER BY tmstamp DESC LIMIT 300) as messages \
+                    LEFT JOIN userscat ON (messages.userid = userscat.refid) \
+                    LEFT JOIN userscat AS destscat ON (messages.destid = destscat.refid) \
+                    LEFT JOIN roomscat ON (messages.roomid = roomscat.refid) ORDER BY tmstamp ASC";
+    var testsquery = "SELECT COALESCE(testdate, to_timestamp(objectstr->>'testdate', 'DD.MM.YYYY hh24:mi')::timestamptz) as testdate, COALESCE(extdata::uuid,savedres.refid) as testid, (objectstr->>'description')::text || ' сервер: ' || (objectstr->>'testserver')::text as description, objectstr ->> 'totalspeed' as totalspeed, objectstr FROM (SELECT extdata,MIN(tmstamp) as testdate FROM messages WHERE datatype=6  GROUP BY extdata) as testmes \
+                        FULL JOIN (SELECT DISTINCT refid, objectstr FROM public.versions WHERE typeid = '0c15cf43-c8a2-2a7f-3c53-e2d3a86a0e62') AS savedres ON (testmes.extdata::uuid = savedres.refid) ORDER BY testdate DESC";                    
+    
+    var qmessparams = [];
+    Promise.all([
+        pgquery(usersquery, qmessparams),
+        pgquery(roomsquery, qmessparams),
+        pgquery(basesquery, qmessparams),
+        pgquery(consquery, qmessparams),
+        pgquery(logsquery, qmessparams),
+        pgquery(devicesquery, qmessparams),
+        pgquery(datasendquery, qmessparams),
+        pgquery(atachmentsquery, qmessparams),
+        pgquery(messagesquery, qmessparams),
+        pgquery(testsquery, qmessparams)
+    ]).then(qresults => {
+
+        var dataid = new_uuid();
+        var curDate = new Date();
+        var resultdata = '{"Users":' + JSON.stringify(qresults[0]) + ',"Rooms": ' + JSON.stringify(qresults[1]) + ',"Bases": ' + JSON.stringify(qresults[2]) + ',"Connections": ' + JSON.stringify(qresults[3]) + ',"Logs": ' + JSON.stringify(qresults[4]) + ',"Devices": ' + JSON.stringify(qresults[5]) + ',"Datasend": ' + JSON.stringify(qresults[6]) + ',"Atachments": ' + JSON.stringify(qresults[7]) + ',"Messages": ' + JSON.stringify(qresults[8]) + ',"Tests": ' + JSON.stringify(qresults[9]) + '}';
+        var resultText = '{"event": "dataDB", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"conscount": ' + qresults[3].length + ',"logscount": ' + qresults[4].length + ',"data": "' + Buffer.from(resultdata).toString("base64") + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '"}';
+
+        var curDateInt = 62135596800000 + Date.now();
+        io.sockets.connected[data.id].binary(false).emit("message", resultText);
+        pgquery("INSERT INTO datasend (dataid, conid, starttime, endtime, timems, tmstamp, https, nodejsver, socketiover, datatype, filesize, serverid, filename) VALUES ($1, $2, $3, 0, 0, $4, $5, $6, $7, 0, $8, $9, '');", [dataid, data.id, curDateInt, curDate, String(config.https ? true : false).toUpperCase(), process.versions.node, socketioVersion, Buffer.byteLength(resultText, 'utf8'), serverId]);
+    }).catch(err => { caughtErr("uncaughtException ", err, JSON.stringify(data)); });
+}
+
+function dataDBupdated(data) {
+    let textquery = "";
+    if (data.type === "users") {
+        textquery = "SELECT refid, marked, number, description, usersign, tmppwd, icon, userid, changestamp, code FROM public.userscat WHERE changestamp > $1::timestamptz";
+    } else if (data.type === "rooms") {
+        textquery = "SELECT refid, marked, code, description, icon, extdesc, roomtype, changestamp, users FROM public.roomscat WHERE changestamp > $1::timestamptz";
+    } else if (data.type === "bases") {
+        textquery = "SELECT refid, description, baseref, baseversion, code, marked, userid, changestamp FROM public.basescat WHERE changestamp > $1::timestamptz";
+    } else if (data.type === "devices") {
+        textquery = "SELECT refid, marked, code, description, platformtype, osversion, appversion, useragentinformation, processor, memory, servercore, servercpufrequency, servercpu, userid, changestamp, senderid FROM public.devicecat WHERE changestamp > $1::timestamptz";
+    } else if (data.type === "messages") {
+        textquery = "SELECT tmstamp, userscat.description as user, destscat.description as dest, mesid, roomscat.description as room, message, datatype, extdata, devtype, datasize, conid, parentid FROM public.messages \
+        LEFT JOIN userscat ON (messages.userid = userscat.refid) \
+        LEFT JOIN userscat AS destscat ON (messages.destid = destscat.refid) \
+        LEFT JOIN roomscat ON (messages.roomid = roomscat.refid)  WHERE tmstamp > $1::timestamptz ORDER BY tmstamp ASC";
+    } else if (data.type === "datasend") {
+        textquery = "SELECT tmstamp, filename, pg_size_pretty(filesize) as filesize, timems, speedmb, https, nodejsver, socketiover, datatype, upload, pg_size_pretty(diskfilesize) as diskfilesize FROM public.datasend WHERE datatype=0 AND tmstamp > $1::timestamptz ORDER BY tmstamp ASC;";
+    } else if (data.type === "atachments") {
+        textquery = "SELECT tmstamp, filename, pg_size_pretty(filesize) as filesize, timems, speedmb, https, nodejsver, socketiover, datatype, upload, pg_size_pretty(diskfilesize) as diskfilesize FROM public.datasend WHERE datatype!=0 AND tmstamp > $1::timestamptz ORDER BY tmstamp ASC;";
+    }
+    var qmessparams = [data.date];
+    pgquery(textquery, qmessparams).then(resultarr => {
+        if (resultarr.length) {
+            io.sockets.connected[data.id].binary(false).emit("message", '{"event": "dataDBupdated", "type": "' + data.type + '","data": "' + Buffer.from(JSON.stringify(resultarr)).toString("base64") + '"}');
+        }
+    }).catch(err => { caughtErr("uncaughtException ", err, JSON.stringify(data)); });
+}
+
+function statistic(data) {
+    var statisticquery = "SELECT (SELECT count(*) FROM public.basescat) as bases, \
+    (SELECT count(*) FROM public.userscat) as users, \
+    (SELECT count(*) FROM public.roomscat) as rooms, \
+    (SELECT count(*) FROM public.devicecat) as devices, \
+    (SELECT count(*)	FROM public.notifications WHERE logtype = 0) as deliverymes, \
+    (SELECT count(*)	FROM public.notifications WHERE logtype = 1) as readmes, \
+    (SELECT reltuples::bigint AS estimate FROM pg_class where relname='messages') as messages, \
+    (SELECT count(*) FROM public.messages WHERE datatype=6) as testmessages, \
+    datasend.rowcount as datarows, pg_size_pretty(datasend.dsize) as datasize, datasend2.datadelivery, datasend2.dataspeed, pg_size_pretty(atachup.atachupsize) as upsize, atachup.upspeed, pg_size_pretty(atachdl.atachdlsize) as dlsize, atachdl.dlspeed \
+        FROM (SELECT count(*) as rowcount, sum(filesize) as dsize FROM public.datasend WHERE datatype=0) as datasend, \
+            (SELECT count(*) as datadelivery, max(speedmb) as dataspeed FROM public.datasend WHERE datatype=0 AND timems > 0) as datasend2, \
+            (SELECT sum(diskfilesize) as atachupsize, max(speedmb) as upspeed FROM public.datasend WHERE datatype!=0 AND upload=true) as atachup, \
+            (SELECT sum(diskfilesize) as atachdlsize, max(speedmb) as dlspeed FROM public.datasend WHERE datatype!=0 AND upload=false) as atachdl ";
+    var statisticparams = [];
+    pgquery(statisticquery, statisticparams).then(resultarr => {
+        if (resultarr.length) {
+            let result = resultarr[0];
+            io.sockets.connected[data.id].binary(false).emit('message', '{"event": "statistic", "users": ' + result.users + ', "rooms": ' + result.rooms + ',"devices": ' + result.devices + ',"bases": ' + result.bases + ', "datarows": ' + result.datarows + ', "datadelivery": ' + result.datadelivery + ', "datasize": "' + result.datasize + '", "dataspeed": "' + result.dataspeed + '", "messages": ' + result.messages + ', "deliverymes": ' + result.deliverymes + ', "readmes": ' + result.readmes + ', "testmessages": ' + result.testmessages + ', "upsize": "' + result.upsize + '", "upspeed": "' + result.upspeed + '", "dlsize": "' + result.dlsize + '", "dlspeed": "' + result.dlspeed + '"}');
+        }
+    }).catch(err => { caughtErr('Error executing statistic query', err.stack, statisticquery + "   " + JSON.stringify(statisticparams)); });
+}
+
+function testresult(data) {
+    var statisticquery = "SELECT EXTRACT(epoch FROM alldelivery/notifycount) as deliveryavg, EXTRACT(epoch FROM maxdelivery) as deliverymax, EXTRACT(epoch FROM mindelivery) as deliverymin, EXTRACT(epoch FROM maxmesdate-minmesdate) as mestime, EXTRACT(epoch FROM maxwritedate-mindeliverytime) as notifytime,EXTRACT(epoch FROM maxdeliverydate-minmesdate) as totaltime,EXTRACT(epoch FROM maxwritedate-minmesdate) as pgtime, maxdeliverydate, minmesdate, maxwritedate, mes1.mescount as mescount, notifycount, deliverycount, testmes.extdata as testdata, testmes.serverid as serverid, testmes.message as message FROM \
+    (SELECT SUM(tmstamp - mes.date) AS alldelivery, MAX(tmstamp - mes.date) AS maxdelivery, MIN(tmstamp - mes.date) AS mindelivery, MAX(mes.date) AS maxmesdate, MIN(mes.date) AS minmesdate, MIN(tmstamp) AS mindeliverytime, MAX(tmstamp) AS maxwritedate, MAX(tmstamp) AS maxdeliverydate, count(1) as notifycount, count(1) as deliverycount FROM public.notifications as notif \
+    INNER JOIN(SELECT mesid, tmstamp as date FROM public.messages WHERE extdata LIKE $1) AS mes ON mes.mesid = notif.mesid) AS notif1, \
+    (SELECT count(1) as mescount FROM public.messages WHERE extdata LIKE $1) AS mes1, (SELECT message, extdata, serverid FROM public.messages LEFT JOIN public.connections ON connections.conid = messages.conid WHERE messages.mesid = $1) AS testmes ";
+    var statisticparams = [data.testid];
+    pgquery(statisticquery, statisticparams).then(resultarr => {
+        if (resultarr.length) {
+            let result = resultarr[0];
+            io.sockets.connected[data.id].binary(false).emit('message', '{"event": "testResult", "testdata": ' + Buffer.from(JSON.stringify(result)).toString("base64") + '"}');
+        }
+    }).catch(err => { caughtErr('Error executing testresult query', err.stack, statisticquery + "   " + JSON.stringify(statisticparams)); });
+}
+
+function testresultsave(data) {
+    var statisticquery = "INSERT INTO versions (stamptime, userid, typeid, refid, objectstr) VALUES (current_timestamp, $1::uuid, '0c15cf43-c8a2-2a7f-3c53-e2d3a86a0e62'::uuid, $2::uuid, $3) RETURNING *";
+    var statisticparams = [data.userid, data.testid, JSON.parse(Buffer.from(data.testresult, 'base64').toString('utf8'))];
+    pgquery(statisticquery, statisticparams).then(resultarr => {
+        if (resultarr.length) {
+            let result = resultarr[0];
+            io.sockets.connected[data.id].binary(false).emit('message', '{"event": "savedTestResult", "testdata": ' + Buffer.from(JSON.stringify(result)).toString("base64") + '"}');
+            pgquery("DELETE FROM notifications WHERE mesid IN(SELECT mesid FROM messages WHERE datatype=6 AND extdata=1$::uuid)", [data.testid]);
+            pgquery("DELETE mesid FROM messages WHERE datatype=6 AND extdata=1$::uuid", [data.testid]);
+        }
+    }).catch(err => { caughtErr('Error executing testresult query', err.stack, statisticquery + "   " + JSON.stringify(statisticparams)); });
+}
+
+function log(logtype, description, userid, ipadress, usercode) {
+    let qparams = [logtype, new_uuid(), description, ipadress, userid, cur_socketid, typeof usercode === 'undefined' ? null : usercode];
+    pgquery("INSERT INTO logs (tmstamp, logtype, logid, description, ipadress, userid, conid, usercode) VALUES (current_timestamp, $1, $2::uuid, $3, $4, $5, $6, $7) RETURNING *", qparams).then(resArr => {
+        if (resArr.length) {
+            resArr[0].description = encodeURIComponent(resArr[0].description);
+            updateAdminClient('{"event":"addLogRow","data":' + JSON.stringify(resArr[0]) + '}');
+            sendAnotherProcess({"event": "addLogRow","data": resArr[0]});
+        }
+    }).catch(err => { caughtErr('Error executing update log query', err.stack, "INSERT INTO logs (tmstamp, logtype, logid, description, ipadress, userid, conid) VALUES (current_timestamp, $1, $2::uuid, $3, $4, $5, $6);" + "   " + JSON.stringify(qparams)); });
 }
 
 process.on('uncaughtException', function (err) {
@@ -148,8 +282,18 @@ process.on('uncaughtException', function (err) {
 
 process.on('SIGINT', function () {
 
-    pool.end();
-    process.exit(0);
+    let updatedata = "";
+    for (let [key, user] of auf_users.entries()) {
+        if (typeof io.sockets.connected[key] != 'undefined')
+            updatedata += ", ('" + key + "'," + ", '" + user.userid + "'," + io.sockets.connected[key].request.client.bytesRead + "," + io.sockets.connected[key].request.client.bytesWritten + ")";
+    }
+    if (updatedata === "") {
+        pool.end();
+        process.exit(0);
+        return;
+    }
+    pgquery("UPDATE connections SET dateoff = current_timestamp, bytesread = subquery.bytesread, byteswrite = subquery.byteswrite FROM (SELECT * FROM ( VALUES " + updatedata.substr(2) + " ) as subquery (conid, userid, bytesread, byteswrite)) as subquery WHERE dateoff IS NULL AND connections.conid = subquery.conid AND connections.userid = subquery.userid::uuid", [])
+    .then(pool.end(), process.exit(0)).catch( pool.end(), process.exit(0));    
 
 });
 
@@ -202,7 +346,7 @@ function saveuserdev(clientid, ostype, osversion, appversion, proc, ram, compnam
             querytext = "UPDATE devicecat SET code=$3::uuid, description=$4, platformtype=$5, osversion=$6, appversion=$7, processor=$8, memory=$9,servercore=0,servercpufrequency=0,servercpu='',userid=$10,changestamp=current_timestamp \
                                 WHERE refid = $1 and (description <> $4 or marked <> $2 or platformtype <> $5 or osversion <> $6 or appversion <> $7 or processor <> $8 or memory <> $9);";
         else
-            querytext = "INSERT INTO devicecat (refid, marked, code, description, platformtype, osversion, appversion, processor, memory,useragentinformation,servercore,servercpufrequency,servercpu,userid) VALUES ($1,$2,$3::uuid,$4,$5,$6,$7,$8,$9,'',0,0,'',$10);";
+            querytext = "INSERT INTO devicecat (refid, marked, code, description, platformtype, osversion, appversion, processor, memory,useragentinformation,servercore,servercpufrequency,servercpu,userid,changestamp) VALUES ($1,$2,$3::uuid,$4,$5,$6,$7,$8,$9,'',0,0,'',$10,current_timestamp);";
 
         await client.query(querytext, queryparams);
         release();
@@ -219,18 +363,18 @@ function findUser(roomUsers, userid) {
 }
 
 function checkRoomUsers(dataRoom) {
-    for (let key in usersList) {
-        if (typeof io.sockets.connected[key] != 'undefined' && !(data.roomid in io.sockets.connected[key].rooms) && findUser(dataRoom.users, usersList[key].userid)) {
+    auf_users.forEach((user, key) => {
+        if (typeof io.sockets.connected[key] != 'undefined' && !(data.roomid in io.sockets.connected[key].rooms) && findUser(dataRoom.users, user.userid)) {
             io.sockets.connected[key].join(data.roomid);
             dataRoom.event = dataRoom.event + 'Join';
             io.sockets.connected[key].binary(false).emit('message', JSON.stringify(dataRoom));
-        } else if (typeof io.sockets.connected[key] != 'undefined' && data.roomid in io.sockets.connected[key].rooms && !(findUser(dataRoom.users, usersList[key].userid))) {
+        } else if (typeof io.sockets.connected[key] != 'undefined' && data.roomid in io.sockets.connected[key].rooms && !(findUser(dataRoom.users, user.userid))) {
             io.sockets.connected[key].leave(data.roomid);
             dataRoom.event = dataRoom.event + 'Leave';
             io.sockets.connected[key].binary(false).emit('message', JSON.stringify(dataRoom));
         } else if (typeof io.sockets.connected[key] != 'undefined' && data.roomid in io.sockets.connected[key].rooms)
             io.sockets.connected[key].binary(false).emit('message', JSON.stringify(dataRoom));
-    }
+    });
 }
 
 function sendAnotherProcess(data) {
@@ -252,7 +396,6 @@ function getProcessStatistic(socid) {
             return caughtErr('Ошибка получения статистики процессов', err.stack, "");
         }
         if (typeof io.sockets.connected[socid] != 'undefined') {
-            setTimeout(getProcessStatistic, 1000, socid);
             io.sockets.connected[socid].binary(false).emit('message', '{"event": "ProcessStatistic","processDescriptionList": ' + getProcessInfo(processDescriptionList) + '}');
         }
     });
@@ -261,7 +404,7 @@ function getProcessStatistic(socid) {
 function getProcessInfo(processList) {
     var procarr = "[";
     for (let i = 0; i < processList.length; i++)
-        procarr = procarr + (procarr == "[" ? "" : ",") + '{"name": "' + processList[i].name + '","pid":' + processList[i].pid + ',"pm_id":' + processList[i].pm_id + ',"memory":' + (processList[i].monit.memory / 1024 / 1024) + ',"cpu":' + processList[i].monit.cpu + ',"pm_uptime":' + processList[i].pm2_env.pm_uptime + ',"status":"' + processList[i].pm2_env.status + '","connections":' + (typeof processList[i].pm2_env.axm_monitor.connections == 'undefined' ? 0 : processList[i].pm2_env.axm_monitor.connections.value) + ',"net_ul":"' + (typeof processList[i].pm2_env.axm_monitor['Network Upload'] == 'undefined' ? 0 : processList[i].pm2_env.axm_monitor['Network Upload'].value) + '","net_dl":"' + (typeof processList[i].pm2_env.axm_monitor['Network Download'] == 'undefined' ? 0 : processList[i].pm2_env.axm_monitor['Network Download'].value) + '","HTTP":"' + (typeof processList[i].pm2_env.axm_monitor.HTTP == 'undefined' ? 0 : processList[i].pm2_env.axm_monitor.HTTP.value) + '","open_ports":' + processList[i].pm2_env.axm_monitor['Open ports'].value + ', "deburl":"' + processList[i].pm2_env.axm_monitor.deburl.value + '", "errlogpath":"' + encodeURIComponent(processList[i].pm2_env.pm_err_log_path) + '"}';
+        procarr = procarr + (procarr == "[" ? "" : ",") + '{"name": "' + processList[i].name + '","pid":' + processList[i].pid + ',"pm_id":' + processList[i].pm_id + ',"memory":' + (processList[i].monit.memory / 1024 / 1024) + ',"cpu":' + processList[i].monit.cpu + ',"pm_uptime":' + processList[i].pm2_env.pm_uptime + ',"status":"' + processList[i].pm2_env.status + '","connections":' + (typeof processList[i].pm2_env.axm_monitor.connections == 'undefined' ? 0 : processList[i].pm2_env.axm_monitor.connections.value) + ',"net_ul":"' + (typeof processList[i].pm2_env.axm_monitor['Network In'] == 'undefined' ? 0 : processList[i].pm2_env.axm_monitor['Network In'].value) + '","net_dl":"' + (typeof processList[i].pm2_env.axm_monitor['Network Out'] == 'undefined' ? 0 : processList[i].pm2_env.axm_monitor['Network Out'].value) + '","HTTP":"' + (typeof processList[i].pm2_env.axm_monitor.HTTP == 'undefined' ? 0 : processList[i].pm2_env.axm_monitor.HTTP.value) + '", "deburl":"' + (typeof processList[i].pm2_env.axm_monitor.deburl == 'undefined' ? '' : processList[i].pm2_env.axm_monitor.deburl.value) + '", "errlogpath":"' + encodeURIComponent(processList[i].pm2_env.pm_err_log_path) + '"}';
 
     return procarr + ']';
 }
@@ -345,7 +488,8 @@ function formatMessage(string) {
 }
 
 function auf(data, socket) {
-    if (typeof bunList[data.user + cur_ip] != 'undefined' && bunList[data.user + cur_ip] >= new Date()) {
+    let bunDate = bunList.get(data.user + cur_ip);
+    if (typeof bunDate != 'undefined' && bunDate >= new Date()) {
         socket.binary(false).send('{"event": "blockUser","user":"' + data.user + '"}');
         return;
     }
@@ -355,8 +499,7 @@ function auf(data, socket) {
             release();
             return caughtErr('Error postgres connection ', err.stack, "");
         }
-        //let userid = crypto.createHash('md5').update(data.user).digest('hex');
-        const result = await client.query("SELECT refid as refid,pwd,tmppwd,description FROM public.userscat WHERE code = $1", [data.user]);
+        const result = await client.query("SELECT userscat.refid,userscat.pwd,userscat.tmppwd,userscat.description,admusers.roomid as admroom FROM userscat LEFT JOIN (SELECT users_roomscat.roomid, users_roomscat.userid FROM users_roomscat LEFT JOIN roomscat ON roomscat.refid = users_roomscat.roomid WHERE roomscat.roomtype=7) as admusers ON userscat.refid = admusers.userid WHERE userscat.code = $1", [data.user]);
         var hash = crypto.createHash('sha256');
         var sucess = false;
         if (result.rows.length > 0) {
@@ -365,33 +508,43 @@ function auf(data, socket) {
                 sucess = true;
         }
         if (sucess) {
-            auf_clients.push(socket.id);
-
             var userid = result.rows[0].refid;
+            let user = { "userid": userid, "description": result.rows[0].description, "pushadmin": (!result.rows[0].admroom ? false : true), "roomadmin": [], "rooms": [], "baseid": data.baseid, "basename": data.basename, "info": data.compname + " :   " + data.basename + " (" + data.basever + ")", "stid": ""};
+            auf_users.set(socket.id, user);
 
-            socket.binary(false).send('{"event":"connected","id":"' + socket.id + '","userid":"' + userid + '","baseid":"' + data.baseid + '","filetranfer":"' + config.filetranfer + '","filemaxsize":' + config.filemaxsize + ',"cipher":"' + socket.request.connection.getCipher().name + '","protocol":"' + socket.request.connection.getProtocol() + '","filepartsize":' + config.filepartsize + ',"setpass":"' + (result.rows[0].tmppwd != '') + '"}');
-            log(1, "Подключение сеанса " + socket.id + " пользователь: " + result.rows[0].description + " ip: " + cur_ip, result.rows[0].refid, cur_ip);
-            pgquery("INSERT INTO connections (userid, conid, dateon, baseid, ipadress, https, usrdevid, procid, serverid, useragent) VALUES ($1,$2, current_timestamp, $3, $4, $5, $6, $7, $8, $9);", [userid, socket.id, data.baseid, cur_ip, config.https, data.clientid, process.env.NODE_APP_INSTANCE, serverId, socket.handshake.headers["user-agent"]]);
+            socket.binary(false).send('{"event":"connected","id":"' + socket.id + '","userid":"' + userid + '","baseid":"' + data.baseid + '","filetranfer":"' + config.filetranfer + '","filemaxsize":' + config.filemaxsize + ',"cipher":"' + (config.https ? socket.request.connection.getCipher().name : '') + '","protocol":"' + (config.https ? socket.request.connection.getProtocol() : '') + '","filepartsize":' + config.filepartsize + ',"setpass":"' + (result.rows[0].tmppwd != '') + '"}');
             
             var eventUserAdd = '{"event":"userAdd","id":"' + socket.id.substring(0, 6) + '","userid":"' + userid + '","user":"' + result.rows[0].description + '","baseid":"' + data.baseid + '","basename":"' + data.basename + '","basever":"' + data.basever + '","baseref":"' + data.baseref + '"}';
             socket.broadcast.binary(false).send(eventUserAdd);
             sendAnotherProcess(JSON.parse(eventUserAdd));
-            usersList[socket.id] = { "userid": userid, "description": result.rows[0].description, "pushadmin": false, "roomadmin": [], "rooms": [], "baseid": data.baseid, "info": data.compname + " :   " + data.basename + " (" + data.basever + ")" };
 
             const usrooms = await client.query("SELECT roomid as roomid, admin as roomadmin, CASE WHEN roomscat.roomtype = 7 THEN FALSE ELSE TRUE END  as pushadmin  FROM users_roomscat INNER JOIN roomscat ON (users_roomscat.roomid = roomscat.refid AND roomscat.marked = false) WHERE users_roomscat.userid = $1::uuid;", [userid]);
             for (let it = 0; it < usrooms.rowCount; it++) {
-                if (data.basename != 'Push0k%20Admin') {
+                if (user.baseid != '26486651-4a0b-5598-6829-155094baddc8') {
                     io.sockets.connected[socket.id].join(usrooms.rows[it].roomid);
-                    usersList[socket.id].rooms.push(usrooms.rows[it].roomid);
+                    user.rooms.push(usrooms.rows[it].roomid);
                 }
 
                 if (usrooms.rows[it].roomadmin) {
-                    usersList[socket.id].roomadmin.push(usrooms.rows[it].roomid);
+                    user.roomadmin.push(usrooms.rows[it].roomid);
                 }
                 if (usrooms.rows[it].pushadmin) {
-                    usersList[socket.id].pushadmin = true;
+                    user.pushadmin = true;
 
                 }
+            }
+            log(1, "Подключение сеанса " + socket.id + " пользователь: " + result.rows[0].description + " ip: " + cur_ip, result.rows[0].refid, cur_ip);
+            var querytext = "WITH updated AS (INSERT INTO connections (userid, conid, dateon, baseid, ipadress, https, usrdevid, procid, serverid, useragent) VALUES ($1,$2, current_timestamp, $3, $4, $5, $6, $7, $8, $9) RETURNING *) \
+                            SELECT userscat.description as user, conns.userid as userid, conid, dateon, dateoff, basescat.description || ' (' || basescat.baseversion || ')' as base, ipadress, devicecat.description as usrdev, contime, auftime, datasintime, pg_size_pretty(datasize) as datasize, https, procid, srvdevicecat.description as server, pg_size_pretty(bytesread) as bytesread, pg_size_pretty(byteswrite) as byteswrite, useragent \
+                            FROM updated AS conns \
+                            LEFT JOIN devicecat ON (conns.usrdevid = devicecat.refid) LEFT JOIN devicecat AS srvdevicecat ON (conns.serverid = srvdevicecat.refid) \
+                            LEFT JOIN basescat ON (conns.baseid = basescat.refid) LEFT JOIN userscat ON (conns.userid = userscat.refid)";
+            let res = await client.query(querytext, [userid, socket.id, data.baseid, cur_ip, config.https, data.clientid, process.env.NODE_APP_INSTANCE, serverId, socket.handshake.headers["user-agent"]]);
+            if (res.rowCount) {
+                res.rows[0].user = encodeURIComponent(res.rows[0].user);
+                res.rows[0].base = encodeURIComponent(res.rows[0].base);
+                updateAdminClient('{"event":"addConnection","data":' + JSON.stringify(res.rows[0]) + '}');
+                sendAnotherProcess({"event": "addConnection","data": res.rows[0]});
             }
             release();
 
@@ -404,18 +557,19 @@ function auf(data, socket) {
             if (result.rows.length > 0)
                 usid = result.rows[0].refid;
 
-            log(6, "Безуспешная попытка авторизации пользователя: " + (result.rowCount ? result.rows[0].description : data.user) + " ip: " + cur_ip, usid, cur_ip);
-            if (config.blockusers && usid != "") {
-                const resrow = await client.query("SELECT count(1) as failcount FROM logs WHERE logtype = 6 AND userid =$1::uuid AND ipadress = $2 AND tmstamp >= current_timestamp - interval '" + config.failauftime + " second';", [usid, cur_ip]);
+            log(6, "Безуспешная попытка авторизации пользователя: " + (result.rowCount ? result.rows[0].description : data.user) + " ip: " + cur_ip, usid, cur_ip, data.user);
+            if (config.blockusers) {
+                const resrow = await client.query("SELECT count(1) as failcount FROM logs WHERE logtype = 6 AND (userid = $1::uuid OR usercode = $3) AND ipadress = $2 AND tmstamp >= current_timestamp - interval '" + config.failauftime + " second';", [usid, cur_ip, data.user]);
 
                 if (resrow.rows.length && resrow.rows[0].failcount >= config.failaufcount) {
-                    bunList[data.user + cur_ip] = new Date();
-                    bunList[data.user + cur_ip].setSeconds(bunList[data.user + cur_ip].getSeconds() + config.blocktime);
+                    let blockDate = new Date();
+                    blockDate.setTime(blockDate.getTime() + config.blocktime*1000);
+                    bunList.set(data.user + cur_ip, blockDate);
+                    sendAnotherProcess({"event": "blockUser","blockString": data.user + cur_ip, "blockDate": blockDate});
                     log(6, "Заблокирован пользователь: " + decodeURIComponent(data.user) + " ip: " + cur_ip, usid, cur_ip);
-                    release();
                 }
-            } else
-                release();
+            }
+            release();
         }
     });
 }
@@ -424,7 +578,6 @@ function sendMessage(data, socket){
     ServerDate = new Date();
     data.date = ServerDate.toISOString();
     data.id = data.id.substring(0, 6);
-    data.info = usersList[socket.id].info;
     var message = decodeURIComponent(data.message);
     if (/^\b((?:[a-z][\w-]+:(?:\/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}\/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'".,<>?«»“”‘’]))$/i.test(message)) {
         data.message = message.replace(/^\b((?:[a-z][\w-]+:(?:\/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}\/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'".,<>?«»“”‘’]))$/i, '<a href="$&">$&</a>');
@@ -435,10 +588,10 @@ function sendMessage(data, socket){
 
     var msg = JSON.stringify(data);
     if (data.roomid == "") {
-        for (var key in usersList) {
-            if ((usersList[key].userid == data.userid || usersList[key].userid == data.destid) && typeof io.sockets.connected[key] != 'undefined')
+        auf_users.forEach((user, key) => {
+            if ((user.userid == data.userid || user.userid == data.destid) && typeof io.sockets.connected[key] != 'undefined')
                 io.sockets.connected[key].binary(false).emit('message', msg);
-        }
+        });
     } else {
         if (data.datatype == 6)
             socket.broadcast.to(data.roomid).binary(false).emit('message', msg);
@@ -460,7 +613,6 @@ function forwardmessage(data, socket){
     ServerDate = new Date();
     data.date = ServerDate.toISOString();
     data.id = data.id.substring(0, 6);
-    data.info = usersList[socket.id].info;
     var querytext = "INSERT INTO messages (tmstamp, userid, destid, mesid, roomid, message, datatype, extdata, devtype, datasize, conid, parentid)\
     SELECT $1, $2::uuid, $3, $4::uuid, $5, message, datatype, extdata, $6, datasize, $7, $8::uuid FROM messages WHERE mesid = $8 RETURNING *";
     var queryparams = [ServerDate, data.userid, (data.destid == '' ? null : data.destid), new_uuid(), (data.roomid == '' ? null : data.roomid), data.devtype, cur_socketid, data.mesid];
@@ -476,10 +628,10 @@ function forwardmessage(data, socket){
             data.mesid = result[0].mesid;
             var msg = JSON.stringify(data);
             if (data.roomid == "")
-                for (var key in usersList) {
-                    if ((usersList[key].userid == data.userid || usersList[key].userid == data.destid) && typeof io.sockets.connected[key] != 'undefined')
+                auf_users.forEach((user, key) => {
+                    if ((user.userid == data.userid || user.userid == data.destid) && typeof io.sockets.connected[key] != 'undefined')
                         io.sockets.connected[key].binary(false).emit('message', msg);
-                }
+                });
             else {
                 socket.to(data.roomid).binary(false).emit('message', msg);
             }
@@ -512,7 +664,8 @@ function atachData(data, socket, msg) {
         data.date = ServerDate.toISOString();
         data.upload = false;
     }
-    data.info = usersList[socket.id].info;
+    let user = auf_users.get(socket.id);
+    data.info = user.info;
     data.event = "atachDataConfirm";
     io.sockets.connected[socket.id].binary(false).emit('message', JSON.stringify(data));
     data.event = "atachData";
@@ -528,15 +681,22 @@ function atachData(data, socket, msg) {
     data.id = data.id.substring(0, 6);
     msg = JSON.stringify(data);
     if (data.roomid == "")
-        for (var key in usersList) {
-            if ((usersList[key].userid == data.userid || usersList[key].userid == data.destid) && socket.id != key && typeof io.sockets.connected[key] != 'undefined')
+        auf_users.forEach((user, key) => {
+            if ((user.userid == data.userid || user.userid == data.destid) && socket.id != key && typeof io.sockets.connected[key] != 'undefined')
                 io.sockets.connected[key].binary(false).emit('message', msg);
-        }
+        });
     else {
         socket.to(data.roomid).binary(false).emit('message', msg);
     }
 
     sendAnotherProcess(data);
+}
+
+function updateAdminClient(updateMes) {
+    auf_users.forEach((user, key) => {
+        if (user.pushadmin && user.baseid === "26486651-4a0b-5598-6829-155094baddc8" && typeof io.sockets.connected[key] != 'undefined')
+            io.sockets.connected[key].binary(false).emit('message', updateMes);
+    });
 }
 
 function dataConfirm(data, socket) {
@@ -546,10 +706,20 @@ function dataConfirm(data, socket) {
             return caughtErr('Error postgres connection ', err.stack, "");
         }
         try {
-            var querytext = "UPDATE connections SET contime=$3, auftime=$4, datasintime=$5, datasize=$6 WHERE dateoff IS NULL AND conid = $1 AND userid = $2;";
+            var querytext = "WITH updated AS (UPDATE connections SET contime=$3, auftime=$4, datasintime=$5, datasize=$6 WHERE dateoff IS NULL AND conid = $1 AND userid = $2 RETURNING *) \
+                            SELECT userscat.description as user, conns.userid as userid, conid, dateon, dateoff, basescat.description || ' (' || basescat.baseversion || ')' as base, ipadress, devicecat.description as usrdev, contime, auftime, datasintime, pg_size_pretty(datasize) as datasize, https, procid, srvdevicecat.description as server, pg_size_pretty(bytesread) as bytesread, pg_size_pretty(byteswrite) as byteswrite, useragent \
+                            FROM updated AS conns \
+                            LEFT JOIN devicecat ON (conns.usrdevid = devicecat.refid) LEFT JOIN devicecat AS srvdevicecat ON (conns.serverid = srvdevicecat.refid) \
+                            LEFT JOIN basescat ON (conns.baseid = basescat.refid) LEFT JOIN userscat ON (conns.userid = userscat.refid)";
             var contime = data.contime > 99999 ? 99999 : data.contime;
             var paramaray = [socket.id, data.userid, contime, data.auftime, data.datasintime, data.datasize];
-            await client.query(querytext, paramaray);
+            let res = await client.query(querytext, paramaray);
+            if (res.rowCount) {
+                res.rows[0].user = encodeURIComponent(res.rows[0].user);
+                res.rows[0].base = encodeURIComponent(res.rows[0].base);
+                updateAdminClient('{"event":"updateConnection","data":' + JSON.stringify(res.rows[0]) + '}');
+                sendAnotherProcess({"event": "updateConnection","data": res.rows[0]});
+            }
             if (!data.datasize)
                 return release();
 
@@ -670,14 +840,16 @@ function changeUser(data, socket) {
         if (result.length) {
             data.event = 'confirmChangeUser';
             data.changestamp = result[0].changestamp;
-            socket.binary(false).emit('message', JSON.stringify(data));
-            sendAnotherProcess(data); // add send user changes to another process and some fix
+            io.sockets.emit('message', JSON.stringify(data));
+            // socket.binary(false).emit('message', JSON.stringify(data));
+            sendAnotherProcess(data);
         }
     }).catch(err => { caughtErr('Error executing changeUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); });
 }
 
 function editRoom(data, socket, msg) {
-    if (data.event != 'newRoom' && usersList[socket.id].roomadmin.indexOf(data.roomid) == -1) {
+    let user = auf_users.get(socket.id);
+    if (data.event != 'newRoom' && user.roomadmin.indexOf(data.roomid) == -1) {
         return caughtErr('Error unautorized change room ', '', msg);
     }
     var updroomquery = "UPDATE roomscat SET description = $1, extdesc = $2, icon = $3, users = $4, userid = $5::uuid, changestamp = current_timestamp \
@@ -761,20 +933,28 @@ io.sockets.on('connection', (socket) => {
             auf(data, socket);
             return;
         }
-        if (auf_clients.indexOf(socket.id) == -1) {
+        if (!auf_users.has(socket.id)) {
             return caughtErr('Error unautorized access ', '', msg);
         }
         data['id'] = socket.id;
-        if (typeof usersList[socket.id] != 'undefined') {
-            var UserId = usersList[socket.id].userid;
-            if (typeof data['userid'] != 'undefined' && UserId != data['userid']) {
-                log(6, "Попытка представиться другим пользователем!!! пользователь: " + UserId + " представлялся: " + data['userid'] + "  сообщение: " + msg, UserId, "");
-                data['userid'] = UserId;
-            }
+        let user = auf_users.get(socket.id);
+        var UserId = user.userid;
+        if (typeof data['userid'] != 'undefined' && UserId != data['userid']) {
+            log(6, "Попытка представиться другим пользователем!!! пользователь: " + UserId + " представлялся: " + data['userid'] + "  сообщение: " + msg, UserId, "");
+            data['userid'] = UserId;
         }
+
         if (data.event == 'getProcessStatistic') {
-            if (usersList[socket.id].pushadmin)
-                setTimeout(getProcessStatistic, 1000, socket.id);
+            if (typeof data.updatetime === 'undefined')
+                data.updatetime = 1000;
+            if (user.stid !== ''){
+                clearInterval(user.stid);
+                user.stid = '';
+            }
+            if (data.updatetime > 0 && user.pushadmin)
+                user.stid = setInterval(getProcessStatistic, data.updatetime, socket.id);
+            else if (data.updatetime <= 0 && user.pushadmin)
+                getProcessStatistic(socket.id);
         } else if (data.event == 'atachData') {
             atachData(data, socket, msg);
         } else if (data.event == 'getData' || data.event == 'getDataSin') {
@@ -817,36 +997,55 @@ io.sockets.on('connection', (socket) => {
         } else if (data.event == 'roomMarked') {
             roomMarked(data);
         } else if (data.event == 'sendMessage') {
+            data.info = user.info;
             sendMessage(data, socket);
         } else if (data.event == 'forwardmessage') {
+            data.info = user.info;
             forwardmessage(data, socket);
+        } else if (data.event == 'getBaseData') {
+            if (user.pushadmin)
+                dataDB(data);
+        } else if (data.event == 'getUpdatedBaseData') {
+            if (user.pushadmin)
+                dataDBupdated(data);        
+        } else if (data.event == 'getStatistic') {
+            if (user.pushadmin)
+                statistic(data);
+        } else if (data.event == 'getTestResult') {
+            if (user.pushadmin)
+                testresult(data);
+        } else if (data.event == 'saveTestResult') {
+            if (user.pushadmin)
+                testresultsave(data);        
         }
-
     });
 
     socket.on('disconnect', function () {
-        if (auf_clients.indexOf(socket.id) == -1)
+        if (!auf_users.has(socket.id))
             return;
 
         var ip = socket.request.connection.remoteAddress.toString().replace("::ffff:", "");
         cur_ip = ip;
 
-        if (typeof usersList[socket.id] != 'undefined') {
-            var useridoff = usersList[socket.id].userid;
-            pgquery("UPDATE connections SET dateoff = current_timestamp, bytesread = $3, byteswrite = $4 WHERE dateoff IS NULL AND conid = $1 AND userid = $2::uuid", [socket.id, useridoff, socket.request.client.bytesRead, socket.request.client.bytesWritten]);
-            log(1, "Отключение сеанса " + socket.id + " пользователь: " + usersList[socket.id].description + " ip: " + ip, useridoff, ip);
-            var data = '{"event": "userSplit", "userid": "' + usersList[socket.id].userid + '", "id": "' + socket.id.substring(0, 6) + '"}';
-            socket.broadcast.json.binary(false).send(data);
-            delete usersList[socket.id];
-            sendAnotherProcess(JSON.parse(data));
-        }
+        let user = auf_users.get(socket.id);
+        var useridoff = user.userid;
+        pgquery("UPDATE connections SET dateoff = current_timestamp, bytesread = $3, byteswrite = $4 WHERE dateoff IS NULL AND conid = $1 AND userid = $2::uuid RETURNING pg_size_pretty(bytesread) as bytesread, pg_size_pretty(byteswrite) as byteswrite", [socket.id, useridoff, socket.request.client.bytesRead, socket.request.client.bytesWritten]).then(resultarr => {
+            if (resultarr.length) {
+                updateAdminClient('{"event":"updateDisconnect","conid":"' + socket.id + '", "userid": "' + useridoff + '", "bytesread": "' + resultarr[0].bytesread + '", "byteswrite": "' + resultarr[0].byteswrite + '"}');
+                sendAnotherProcess({"event": "updateDisconnect","conid": socket.id, "userid": useridoff, "bytesread": resultarr[0].bytesread, "byteswrite": resultarr[0].byteswrite});
+            }
+        }).catch(err => { caughtErr("uncaughtException ", err, ''); });
+        log(1, "Отключение сеанса " + socket.id + " пользователь: " + user.description + " ip: " + ip, useridoff, ip);
+        var data = '{"event": "userSplit", "userid": "' + user.userid + '", "id": "' + socket.id.substring(0, 6) + '"}';
+        socket.broadcast.json.binary(false).send(data);
+        sendAnotherProcess(JSON.parse(data));
 
-        auf_clients.splice(auf_clients.indexOf(socket.id), 1);
+        auf_users.delete(socket.id);
         socket.disconnect();
     });
 
     setTimeout(function (socid) {
-        if (auf_clients.indexOf(socid) == -1 && typeof io.sockets.connected[socid] != 'undefined')
+        if (!auf_users.has(socket.id) && typeof io.sockets.connected[socid] != 'undefined')
             io.sockets.connected[socid].disconnect();
     }, 30000, socket.id);
 });
@@ -854,28 +1053,32 @@ io.sockets.on('connection', (socket) => {
 process.on('message', function (packet) {
     var data = packet.data.message;
     if ((data.event == "sendMessage" && data.roomid == "") || (data.event == "atachData" && data.roomid == "")) {
-        for (var key in usersList) {
-            if ((usersList[key].userid == data.userid || usersList[key].userid == data.destid) && typeof io.sockets.connected[key] != 'undefined')
+        auf_users.forEach((user, key) => {
+            if ((user.userid == data.userid || user.userid == data.destid) && typeof io.sockets.connected[key] != 'undefined')
                 io.sockets.connected[key].binary(false).emit('message', JSON.stringify(data));
-        }
+        });
     } else if (data.event == "confirmChangeRoom") {
         checkRoomUsers(data);
+    } else if (data.event == "updateConnection" || data.event == "updateDisconnect" || data.event == "addConnection" || data.event == "addLogRow") {
+        updateAdminClient(JSON.stringify(data)); 
+    } else if (data.event == "blockUser") {    
+        bunList.set(data.blockString, data.blockDate);
     } else if (data.event == "userAdd" || data.event == "userSplit" || data.event == "confirmChangeUser") {
-        io.sockets.emit('message', data);    
+        io.sockets.emit('message', JSON.stringify(data));
     } else if ((data.event == "sendMessage" && data.roomid != "") || (data.event == "atachData" && data.roomid != "")) {
         if (typeof io.sockets.adapter.rooms != 'undefined' && typeof io.sockets.adapter.rooms[data.roomid] != 'undefined')
             io.of('/').to(data.roomid).binary(false).emit('message', JSON.stringify(data));
     }
 });
 
-var connections = probe.metric({
+probe.metric({
     name: 'connections',
     value: function () {
-        return auf_clients.length;
+        return auf_users.size;
     }
 });
 
-var deburl = probe.metric({
+probe.metric({
     name: 'deburl',
     value: function () {
         return inspector.url();

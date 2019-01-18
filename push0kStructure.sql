@@ -2,8 +2,8 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.8
--- Dumped by pg_dump version 10.3
+-- Dumped from database version 9.6.9
+-- Dumped by pg_dump version 11.1
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -17,28 +17,14 @@ SET escape_string_warning = off;
 SET row_security = off;
 
 --
--- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: 
---
-
-CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
-
-
---
--- Name: EXTENSION plpgsql; Type: COMMENT; Schema: -; Owner: 
---
-
-COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
-
-
---
 -- Name: add_users_contact(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.add_users_contact() RETURNS trigger
     LANGUAGE plpgsql LEAKPROOF
     AS $$    BEGIN
-		INSERT INTO users_contacts (userid, contactid, description, changestamp) SELECT refid, NEW.refid,NEW.description, current_timestamp FROM userscat;
-		INSERT INTO users_contacts (userid, contactid, description, changestamp) SELECT NEW.refid, refid, description, current_timestamp FROM userscat;
+		INSERT INTO public.users_contacts (userid, contactid, description, changestamp) SELECT refid, NEW.refid, NEW.description, current_timestamp FROM public.userscat;
+		INSERT INTO public.users_contacts (userid, contactid, description, changestamp) SELECT NEW.refid, refid, description, current_timestamp FROM public.userscat WHERE refid != NEW.refid;
         RETURN NEW;
     END;
 
@@ -55,11 +41,11 @@ CREATE FUNCTION public.save_version() RETURNS trigger
     LANGUAGE plpgsql LEAKPROOF
     AS $$    BEGIN
 		IF TG_TABLE_NAME = 'users_contacts' THEN
-			INSERT INTO versions (stamptime,userid,typeid,refid,objectstr) VALUES(OLD.changestamp,OLD.userid,MD5(TG_TABLE_NAME)::uuid,OLD.contactid,row_to_json(OLD));
+			INSERT INTO public.versions (stamptime,userid,typeid,refid,objectstr) VALUES(OLD.changestamp,OLD.userid,MD5(TG_TABLE_NAME)::uuid,OLD.contactid,row_to_json(OLD));
 		ELSE
-			INSERT INTO versions (stamptime,userid,typeid,refid,objectstr) VALUES(OLD.changestamp,OLD.userid,MD5(TG_TABLE_NAME)::uuid,OLD.refid,row_to_json(OLD));
+			INSERT INTO public.versions (stamptime,userid,typeid,refid,objectstr) VALUES(OLD.changestamp,OLD.userid,MD5(TG_TABLE_NAME)::uuid,OLD.refid,row_to_json(OLD));
 		END IF;		
-		NEW.changestamp	= current_timestamp;
+		NEW.changestamp	= current_timestamp::timestamptz(3);
         RETURN NEW;
     END;
 
@@ -76,12 +62,12 @@ CREATE FUNCTION public.update_room_users() RETURNS trigger
     LANGUAGE plpgsql LEAKPROOF
     AS $$    BEGIN
 		IF (TG_OP = 'INSERT') THEN
-			INSERT INTO users_roomscat (userid, roomid, lineno, rowid, admin) 
-				SELECT * FROM jsonb_populate_recordset(null::users_roomscat, NEW.users);
+			INSERT INTO public.users_roomscat (userid, roomid, lineno, rowid, admin) 
+				SELECT * FROM jsonb_populate_recordset(null::public.users_roomscat, NEW.users);
 		ELSIF OLD.users != NEW.users THEN
-			DELETE FROM users_roomscat WHERE roomid = OLD.refid;
-			INSERT INTO users_roomscat (userid, roomid, lineno, rowid, admin) 
-				SELECT * FROM jsonb_populate_recordset(null::users_roomscat, NEW.users);
+			DELETE FROM public.users_roomscat WHERE roomid = OLD.refid;
+			INSERT INTO public.users_roomscat (userid, roomid, lineno, rowid, admin) 
+				SELECT * FROM jsonb_populate_recordset(null::public.users_roomscat, NEW.users);
 		END IF;	
         RETURN NEW;
     END;
@@ -90,31 +76,6 @@ $$;
 
 
 ALTER FUNCTION public.update_room_users() OWNER TO postgres;
-
---
--- Name: write_notification(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.write_notification() RETURNS trigger
-    LANGUAGE plpgsql LEAKPROOF
-    AS $$    BEGIN
-		IF (NEW.roomid IS NULL) THEN
-			INSERT INTO notifications (mesid, userid, baseid, usrdevid) 
-				SELECT DISTINCT NEW.mesid, userid, baseid, usrdevid FROM connections 
-					WHERE baseid != NEW.baseid AND baseid != MD5('push0kAdminPush0k Admin')::uuid 
-						AND userid IN (NEW.userid, NEW.destid);
-		ELSIF (NEW.roomid IS NOT NULL) THEN
-			INSERT INTO notifications (mesid, userid, baseid, usrdevid) 
-				SELECT DISTINCT NEW.mesid, userid, baseid, usrdevid FROM connections 
-					WHERE baseid != NEW.baseid AND baseid != MD5('push0kAdminPush0k Admin')::uuid 
-						AND userid IN (SELECT userid FROM users_roomscat WHERE roomid = NEW.roomid);
-		END IF;				
-        RETURN NULL;
-    END;
-$$;
-
-
-ALTER FUNCTION public.write_notification() OWNER TO postgres;
 
 SET default_tablespace = '';
 
@@ -125,13 +86,13 @@ SET default_with_oids = false;
 --
 
 CREATE TABLE public.basescat (
-    refid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    refid uuid NOT NULL,
     description character varying(256) NOT NULL,
     baseref character varying(1024) NOT NULL,
     baseversion character varying(256) NOT NULL,
     code character varying(36) DEFAULT ''::character varying NOT NULL,
     marked boolean DEFAULT false NOT NULL,
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    userid uuid NOT NULL,
     changestamp timestamp with time zone DEFAULT '0001-01-01 00:00:00'::timestamp without time zone NOT NULL
 );
 
@@ -143,13 +104,13 @@ ALTER TABLE public.basescat OWNER TO postgres;
 --
 
 CREATE TABLE public.connections (
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
-    conid character(22) NOT NULL,
+    userid uuid NOT NULL,
+    conid character varying(22) NOT NULL,
     dateon timestamp with time zone NOT NULL,
     dateoff timestamp with time zone,
-    baseid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    baseid uuid,
     ipadress character varying(16) NOT NULL,
-    usrdevid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    usrdevid uuid NOT NULL,
     contime numeric(5,0) DEFAULT 0 NOT NULL,
     auftime numeric(5,0) DEFAULT 0 NOT NULL,
     datasintime numeric(5,0) DEFAULT 0 NOT NULL,
@@ -159,7 +120,7 @@ CREATE TABLE public.connections (
     serverid uuid,
     bytesread numeric(16,0) DEFAULT 0 NOT NULL,
     byteswrite numeric(16,0) DEFAULT 0 NOT NULL,
-    useragent character varying(25) DEFAULT ''::character varying NOT NULL
+    useragent character varying(256) DEFAULT ''::character varying NOT NULL
 );
 
 
@@ -170,7 +131,7 @@ ALTER TABLE public.connections OWNER TO postgres;
 --
 
 CREATE TABLE public.datasend (
-    dataid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    dataid uuid NOT NULL,
     conid character(22) NOT NULL,
     filename character varying(256) NOT NULL,
     filesize numeric(16,0) NOT NULL,
@@ -183,7 +144,7 @@ CREATE TABLE public.datasend (
     onecver character varying(15) DEFAULT ''::character varying NOT NULL,
     nodejsver character varying(15) NOT NULL,
     socketiover character varying(15) NOT NULL,
-    serverid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    serverid uuid NOT NULL,
     datatype numeric(1,0) NOT NULL,
     upload boolean DEFAULT false NOT NULL,
     diskfilesize numeric(16,0) DEFAULT 0 NOT NULL,
@@ -199,7 +160,7 @@ ALTER TABLE public.datasend OWNER TO postgres;
 --
 
 CREATE TABLE public.devicecat (
-    refid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    refid uuid NOT NULL,
     marked boolean NOT NULL,
     code character varying(36) NOT NULL,
     description character varying(50) NOT NULL,
@@ -213,7 +174,8 @@ CREATE TABLE public.devicecat (
     servercpufrequency numeric(5,0) NOT NULL,
     servercpu character varying(50) NOT NULL,
     userid uuid,
-    changestamp timestamp with time zone DEFAULT make_timestamptz(1, 1, 1, 0, 0, (0)::double precision, 'utc'::text) NOT NULL
+    changestamp timestamp with time zone DEFAULT make_timestamptz(1, 1, 1, 0, 0, (0)::double precision, 'utc'::text) NOT NULL,
+    senderid character varying(1024) COLLATE pg_catalog."ru_RU.utf8" DEFAULT ''::character varying NOT NULL
 );
 
 
@@ -224,13 +186,14 @@ ALTER TABLE public.devicecat OWNER TO postgres;
 --
 
 CREATE TABLE public.logs (
-    logid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    logid uuid NOT NULL,
     logtype numeric(1,0) NOT NULL,
     tmstamp timestamp with time zone NOT NULL,
     description character varying NOT NULL,
     ipadress character varying(16) NOT NULL,
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
-    conid character(22)
+    userid uuid,
+    conid character(22),
+    usercode numeric(13,0)
 );
 
 
@@ -242,9 +205,9 @@ ALTER TABLE public.logs OWNER TO postgres;
 
 CREATE TABLE public.messages (
     tmstamp timestamp with time zone NOT NULL,
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    userid uuid NOT NULL,
     destid uuid,
-    mesid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    mesid uuid NOT NULL,
     roomid uuid,
     message character varying NOT NULL,
     datatype numeric(1,0) NOT NULL,
@@ -264,10 +227,10 @@ ALTER TABLE public.messages OWNER TO postgres;
 
 CREATE TABLE public.notifications (
     tmstamp timestamp with time zone,
-    mesid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
-    baseid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
-    usrdevid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    mesid uuid NOT NULL,
+    userid uuid NOT NULL,
+    baseid uuid NOT NULL,
+    usrdevid uuid NOT NULL,
     logtype numeric(1,0) DEFAULT 0 NOT NULL
 );
 
@@ -308,7 +271,8 @@ CREATE TABLE public.registration (
     result_stamp timestamp with time zone DEFAULT '0001-01-01 00:00:00'::timestamp without time zone NOT NULL,
     result_userid uuid NOT NULL,
     result_reg boolean NOT NULL,
-    result_desc character varying(256)
+    result_desc character varying(256),
+    numberinfo character varying(256) COLLATE pg_catalog."ru_RU.utf8" DEFAULT ''::character varying NOT NULL
 );
 
 
@@ -326,7 +290,7 @@ CREATE TABLE public.roomscat (
     extdesc character varying NOT NULL,
     roomtype numeric(1,0) DEFAULT 0 NOT NULL,
     icon character varying DEFAULT ''::character varying NOT NULL,
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    userid uuid NOT NULL,
     changestamp timestamp with time zone DEFAULT '0001-01-01 00:00:00'::timestamp without time zone NOT NULL,
     users jsonb,
     objectid uuid,
@@ -357,10 +321,10 @@ ALTER TABLE public.users_contacts OWNER TO postgres;
 --
 
 CREATE TABLE public.users_roomscat (
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
-    roomid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    userid uuid NOT NULL,
+    roomid uuid NOT NULL,
     lineno numeric(5,0) NOT NULL,
-    rowid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    rowid uuid NOT NULL,
     admin boolean DEFAULT false NOT NULL
 );
 
@@ -372,15 +336,15 @@ ALTER TABLE public.users_roomscat OWNER TO postgres;
 --
 
 CREATE TABLE public.userscat (
-    refid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    refid uuid NOT NULL,
     marked boolean DEFAULT false NOT NULL,
     number character varying(20) NOT NULL,
     description character varying(25) NOT NULL,
     pwd character varying NOT NULL,
-    usersign character varying(256) NOT NULL,
+    usersign character varying(256) NOT NULL DEFAULT ''::character varying,
     tmppwd character varying NOT NULL,
     icon character varying DEFAULT ''::character varying NOT NULL,
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    userid uuid NOT NULL,
     changestamp timestamp with time zone DEFAULT '0001-01-01 00:00:00'::timestamp without time zone NOT NULL,
     code numeric(13,0) DEFAULT NULL::numeric NOT NULL
 );
@@ -394,9 +358,9 @@ ALTER TABLE public.userscat OWNER TO postgres;
 
 CREATE TABLE public.versions (
     stamptime timestamp with time zone NOT NULL,
-    userid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
-    typeid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
-    refid uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
+    userid uuid NOT NULL,
+    typeid uuid NOT NULL,
+    refid uuid NOT NULL,
     objectstr jsonb NOT NULL
 );
 
@@ -462,15 +426,6 @@ CREATE UNIQUE INDEX connections_by_dateoff ON public.connections USING btree (da
 
 CREATE UNIQUE INDEX connections_bydims ON public.connections USING btree (userid, conid);
 
-ALTER TABLE public.connections CLUSTER ON connections_bydims;
-
-
---
--- Name: datasend_by_upload_dataid_conid; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE UNIQUE INDEX datasend_by_upload_dataid_conid ON public.datasend USING btree (upload, dataid, conid);
-
 
 --
 -- Name: datasend_bydims; Type: INDEX; Schema: public; Owner: postgres
@@ -511,6 +466,13 @@ ALTER TABLE public.logs CLUSTER ON logs_bydims;
 CREATE UNIQUE INDEX messages_bydims ON public.messages USING btree (tmstamp, userid, destid, mesid, roomid);
 
 ALTER TABLE public.messages CLUSTER ON messages_bydims;
+
+
+--
+-- Name: messages_types; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX messages_types ON public.messages USING btree (datatype);
 
 
 --
@@ -630,8 +592,12 @@ CREATE TRIGGER savevers BEFORE UPDATE ON public.users_contacts FOR EACH ROW EXEC
 
 CREATE TRIGGER update_users BEFORE INSERT OR UPDATE ON public.roomscat FOR EACH ROW EXECUTE PROCEDURE public.update_room_users();
 
-
 --
--- PostgreSQL database dump complete
+-- PostgreSQL initial data
 --
 
+INSERT INTO public.userscat (refid, marked, number, description, pwd, tmppwd, userid, changestamp, code) VALUES ('72e7ff70-531f-a9ed-efad-51d8e159c6b0',false,'+7 (999) 777-77-77','Admin','96e00d6bbe426977184b9e287cbb781070a426359b67befeeba52d4703f75a69','777','72e7ff70-531f-a9ed-efad-51d8e159c6b0','2019-01-01 07:07:07.811+00',79267777777);
+
+INSERT INTO public.roomscat (refid, marked, code, description, extdesc, roomtype, userid, changestamp, users) VALUES ('45cee4ef-4827-4dac-9b35-a6c814760ea9',false,'9b35a6c8-1476-0ea9-4dac-482745cee4ef','Administrators','Server admins',7,'72e7ff70-531f-a9ed-efad-51d8e159c6b0','2019-01-01 07:07:07.811+00','[{"admin": true, "rowid": "260f6a7d-5aef-4f0d-a2fd-4c5634325dbd", "lineno": 1, "roomid": "45cee4ef-4827-4dac-9b35-a6c814760ea9", "userid": "72e7ff70-531f-a9ed-efad-51d8e159c6b0"}]');
+
+INSERT INTO public.roomscat (refid, marked, code, description, extdesc, roomtype, userid, changestamp, users) VALUES ('802b7695-2d22-42f2-8b9d-cf3b8645a613',false,'8b9dcf3b-8645-a613-42f2-2d22802b7695','Testing','Server testing',6,'72e7ff70-531f-a9ed-efad-51d8e159c6b0','2019-01-01 07:07:07.911+00','[{"admin": true, "rowid": "321a1a16-408a-4114-be3b-cbd87cbb5236", "lineno": 1, "roomid": "802b7695-2d22-42f2-8b9d-cf3b8645a613", "userid": "72e7ff70-531f-a9ed-efad-51d8e159c6b0"}]');
