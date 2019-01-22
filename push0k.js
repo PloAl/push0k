@@ -832,19 +832,54 @@ function GetAtach(data, socket) {
     }
 }
 
-function changeUser(data, socket) {
+function sha256(p) {
+    const hash = crypto.createHash('sha256');
+    hash.update(p);
+    return '' + hash.digest('hex');
+}
+
+function changeUser(data, admin) {
     var updusrquery = "UPDATE userscat SET usersign = $1, icon = $2, userid = $3::uuid, changestamp = current_timestamp \
                 WHERE refid = $3::uuid AND (usersign != $1 OR icon != $2) RETURNING changestamp;";
     var updusrparams = [decodeURIComponent(data.sign), data.icon, data.userid];
+    if (admin) {
+        updusrquery.replace('refid = $3', 'refid = $4');
+        updusrparams.push(data.refid);
+    }
+    if (admin && data.tmppwd !== '') {
+        updusrquery.replace('userid = $3::uuid,', 'userid = $3::uuid, tmppwd = $5, pwd = $6,');
+        updusrparams.push(data.tmppwd);
+        updusrparams.push(sha256(sha256(data.tmppwd)));
+    }
+
     pgquery(updusrquery, updusrparams).then(result => {
         if (result.length) {
             data.event = 'confirmChangeUser';
+            data.tmppwd = "";
+            data.id = data.id.substring(0,6);
             data.changestamp = result[0].changestamp;
-            io.sockets.emit('message', JSON.stringify(data));
+            io.sockets.binary(false).emit('message', JSON.stringify(data));
             // socket.binary(false).emit('message', JSON.stringify(data));
             sendAnotherProcess(data);
         }
     }).catch(err => { caughtErr('Error executing changeUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); });
+}
+
+function newUser(data) {
+    var updusrquery = "INSERT INTO userscat SET refid = $1, number = $2, code = $3, description = $4, usersign = $5, icon = $6, userid = $7::uuid, pwd = $8, tmppwd = $9 changestamp = current_timestamp, marked = false RETURNING changestamp;";
+    var updusrparams = [data.refid, data.number, data.code, decodeURIComponent(data.description), decodeURIComponent(data.sign), data.icon, data.userid, sha256(sha256(data.tmppwd)), data.tmppwd];
+
+    pgquery(updusrquery, updusrparams).then(result => {
+        if (result.length) {
+            data.event = 'confirmNewUser';
+            data.tmppwd = "";
+            data.id = data.id.substring(0,6);
+            data.changestamp = result[0].changestamp;
+            io.sockets.binary(false).emit('message', JSON.stringify(data));
+            // socket.binary(false).emit('message', JSON.stringify(data));
+            sendAnotherProcess(data);
+        }
+    }).catch(err => { caughtErr('Error executing newUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); });
 }
 
 function editRoom(data, socket, msg) {
@@ -861,6 +896,7 @@ function editRoom(data, socket, msg) {
     pgquery(updroomquery, updroomparams).then(result => {
         if (result.length) {
             data.event = 'confirmChangeRoom';
+            data.id = data.id.substring(0,6);
             data.marked = false;
             data.changestamp = result[0].changestamp;
             checkRoomUsers(data);
@@ -878,7 +914,12 @@ function changeContact(data, socket) {
         if (result.length) {
             data.event = 'confirmChangeContact';
             data.changestamp = result[0].changestamp;
-            socket.binary(false).emit('message', JSON.stringify(data));
+            // socket.binary(false).emit('message', JSON.stringify(data));
+            auf_users.forEach((user, key) => {
+                if (user.userid == data.userid && typeof io.sockets.connected[key] != 'undefined')
+                    io.sockets.connected[key].binary(false).emit('message', JSON.stringify(data));
+            });
+            sendAnotherProcess(data);
         }
     }).catch(err => { caughtErr('Error executing changeContact query', err.stack, updquerytext + "   " + JSON.stringify(updqueryparams)); });
 }
@@ -894,6 +935,7 @@ function roomExit(data, socket) {
                 result.users.splice(i, 1);
                 pgquery("UPDATE roomscat SET users = $2 WHERE refid = $1::uuid RETURNING *", [data.roomid, JSON.stringify(result.users)]);
                 data.event = 'confirmRoomExit';
+                data.id = data.id.substring(0,6);
                 io.of('/').to(data.roomid).binary(false).emit('message', JSON.stringify(data));
                 socket.leave(data.roomid);
                 sendAnotherProcess(data);
@@ -907,6 +949,7 @@ function roomMarked(data, admin) {
     pgquery(roommarkquery, [data.roomid, data.userid, data.mark]).then(result => {
         if (result.length) {
             data.event = 'confirmRoomMarked';
+            data.id = data.id.substring(0,6);
             data.tmstamp = result[0].changestamp;
             io.of('/').to(data.roomid).binary(false).emit('message', JSON.stringify(data));
             sendAnotherProcess(data);
@@ -919,6 +962,7 @@ function userMarked(data) {
     pgquery(usermarkquery, [data.refid,data.userid,data.mark]).then(result => {
         if (result.length) {
             data.event = 'confirmUserMarked';
+            data.id = data.id.substring(0,6);
             data.tmstamp = result[0].changestamp;
             io.sockets.emit('message', JSON.stringify(data));
             sendAnotherProcess(data);
@@ -1002,7 +1046,10 @@ io.sockets.on('connection', (socket) => {
             GetAtach(data, socket);
             return;
         } else if (data.event == 'changeUser') {
-            changeUser(data, socket);
+            changeUser(data, user.pushadmin);
+        } else if (data.event == 'newUser') {
+            if (user.pushadmin)
+                newUser(data, user.pushadmin);    
         } else if (data.event == 'changeRoom' || data.event == 'newRoom') {
             editRoom(data, socket, msg);
         } else if (data.event == 'changeContact') {
@@ -1077,6 +1124,11 @@ process.on('message', function (packet) {
         });
     } else if (data.event == "confirmChangeRoom") {
         checkRoomUsers(data);
+    } else if (data.event == "confirmChangeContact") {
+        auf_users.forEach((user, key) => {
+            if (user.userid == data.userid && typeof io.sockets.connected[key] != 'undefined')
+                io.sockets.connected[key].binary(false).emit('message', JSON.stringify(data));
+        });
     } else if (data.event == "updateConnection" || data.event == "updateDisconnect" || data.event == "addConnection" || data.event == "addLogRow") {
         updateAdminClient(JSON.stringify(data)); 
     } else if (data.event == "blockUser") {    
