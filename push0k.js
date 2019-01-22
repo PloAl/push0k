@@ -865,7 +865,7 @@ function changeUser(data, admin) {
     }).catch(err => { caughtErr('Error executing changeUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); });
 }
 
-function newUser(data) {
+function newUser(data,socket) {
     var updusrquery = "INSERT INTO userscat SET refid = $1, number = $2, code = $3, description = $4, usersign = $5, icon = $6, userid = $7::uuid, pwd = $8, tmppwd = $9 changestamp = current_timestamp, marked = false RETURNING changestamp;";
     var updusrparams = [data.refid, data.number, data.code, decodeURIComponent(data.description), decodeURIComponent(data.sign), data.icon, data.userid, sha256(sha256(data.tmppwd)), data.tmppwd];
 
@@ -876,10 +876,15 @@ function newUser(data) {
             data.id = data.id.substring(0,6);
             data.changestamp = result[0].changestamp;
             io.sockets.binary(false).emit('message', JSON.stringify(data));
-            // socket.binary(false).emit('message', JSON.stringify(data));
             sendAnotherProcess(data);
         }
-    }).catch(err => { caughtErr('Error executing newUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); });
+    }).catch(err => { 
+        caughtErr('Error executing newUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); 
+        data.event = 'errNewUser';
+        data.err = err;
+        data.tmppwd = "";
+        socket.binary(false).emit('message', JSON.stringify(data));
+    });
 }
 
 function editRoom(data, socket, msg) {
@@ -1049,7 +1054,7 @@ io.sockets.on('connection', (socket) => {
             changeUser(data, user.pushadmin);
         } else if (data.event == 'newUser') {
             if (user.pushadmin)
-                newUser(data, user.pushadmin);    
+                newUser(data, socket);    
         } else if (data.event == 'changeRoom' || data.event == 'newRoom') {
             editRoom(data, socket, msg);
         } else if (data.event == 'changeContact') {
