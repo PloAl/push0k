@@ -509,7 +509,7 @@ function auf(data, socket) {
         }
         if (sucess) {
             var userid = result.rows[0].refid;
-            let user = { "userid": userid, "description": result.rows[0].description, "pushadmin": (!result.rows[0].admroom ? false : true), "roomadmin": [], "rooms": [], "baseid": data.baseid, "basename": data.basename, "info": data.compname + " :   " + data.basename + " (" + data.basever + ")", "stid": ""};
+            let user = { "userid": userid, "description": result.rows[0].description, "pushadmin": (!result.rows[0].admroom ? false : true), "adminClient": (result.rows[0].admroom && !data.roomsjoin), "roomadmin": [], "rooms": [], "baseid": data.baseid, "basename": data.basename, "info": data.compname + " :   " + data.basename + " (" + data.basever + ")", "stid": ""};
             auf_users.set(socket.id, user);
 
             socket.binary(false).send('{"event":"connected","id":"' + socket.id + '","userid":"' + userid + '","baseid":"' + data.baseid + '","filetranfer":"' + config.filetranfer + '","filemaxsize":' + config.filemaxsize + ',"cipher":"' + (config.https ? socket.request.connection.getCipher().name : '') + '","protocol":"' + (config.https ? socket.request.connection.getProtocol() : '') + '","filepartsize":' + config.filepartsize + ',"setpass":"' + (result.rows[0].tmppwd != '') + '"}');
@@ -520,7 +520,7 @@ function auf(data, socket) {
 
             const usrooms = await client.query("SELECT roomid as roomid, admin as roomadmin, CASE WHEN roomscat.roomtype = 7 THEN FALSE ELSE TRUE END  as pushadmin  FROM users_roomscat INNER JOIN roomscat ON (users_roomscat.roomid = roomscat.refid AND roomscat.marked = false) WHERE users_roomscat.userid = $1::uuid;", [userid]);
             for (let it = 0; it < usrooms.rowCount; it++) {
-                if (user.baseid != '26486651-4a0b-5598-6829-155094baddc8') {
+                if (data.roomsjoin) {
                     io.sockets.connected[socket.id].join(usrooms.rows[it].roomid);
                     user.rooms.push(usrooms.rows[it].roomid);
                 }
@@ -694,7 +694,7 @@ function atachData(data, socket, msg) {
 
 function updateAdminClient(updateMes) {
     auf_users.forEach((user, key) => {
-        if (user.pushadmin && user.baseid === "26486651-4a0b-5598-6829-155094baddc8" && typeof io.sockets.connected[key] != 'undefined')
+        if (user.pushadmin && user.adminClient && typeof io.sockets.connected[key] != 'undefined')
             io.sockets.connected[key].binary(false).emit('message', updateMes);
     });
 }
@@ -887,10 +887,10 @@ function newUser(data,socket) {
     });
 }
 
-function editRoom(data, socket, msg) {
+function editRoom(data, socket, admin) {
     let user = auf_users.get(socket.id);
-    if (data.event != 'newRoom' && user.roomadmin.indexOf(data.roomid) == -1) {
-        return caughtErr('Error unautorized change room ', '', msg);
+    if (data.event != 'newRoom' && user.roomadmin.indexOf(data.roomid) == -1 && !admin) {
+        return caughtErr('Error unautorized change room ', '', JSON.stringify(data));
     }
     var updroomquery = "UPDATE roomscat SET description = $1, extdesc = $2, icon = $3, users = $4, userid = $5::uuid, changestamp = current_timestamp \
         WHERE refid = $6::uuid AND (description != $1 OR extdesc != $2 OR icon != $3 OR users != $4) RETURNING changestamp;";
@@ -905,7 +905,7 @@ function editRoom(data, socket, msg) {
             data.marked = false;
             data.changestamp = result[0].changestamp;
             checkRoomUsers(data);
-            data.event = 'confirmChangeRoom';
+            updateAdminClient(JSON.stringify(data));
             sendAnotherProcess(data);
         }
     }).catch(err => { caughtErr('Error executing changeRoom query', err.stack, updroomquery + "   " + JSON.stringify(updroomparams)); });
@@ -941,7 +941,9 @@ function roomExit(data, socket) {
                 pgquery("UPDATE roomscat SET users = $2 WHERE refid = $1::uuid RETURNING *", [data.roomid, JSON.stringify(result.users)]);
                 data.event = 'confirmRoomExit';
                 data.id = data.id.substring(0,6);
-                io.of('/').to(data.roomid).binary(false).emit('message', JSON.stringify(data));
+                let datastr = JSON.stringify(data);
+                io.of('/').to(data.roomid).binary(false).emit('message', datastr);
+                updateAdminClient(datastr);
                 socket.leave(data.roomid);
                 sendAnotherProcess(data);
             }
@@ -956,7 +958,9 @@ function roomMarked(data, admin) {
             data.event = 'confirmRoomMarked';
             data.id = data.id.substring(0,6);
             data.tmstamp = result[0].changestamp;
-            io.of('/').to(data.roomid).binary(false).emit('message', JSON.stringify(data));
+            let datastr = JSON.stringify(data);
+            io.of('/').to(data.roomid).binary(false).emit('message', datastr);
+            updateAdminClient(datastr);
             sendAnotherProcess(data);
         }
     }).catch(err => { caughtErr('Error executing roomMarked query', err.stack, roommarkquery + "   " + data.roomid); });
@@ -1056,7 +1060,7 @@ io.sockets.on('connection', (socket) => {
             if (user.pushadmin)
                 newUser(data, socket);    
         } else if (data.event == 'changeRoom' || data.event == 'newRoom') {
-            editRoom(data, socket, msg);
+            editRoom(data, socket, user.pushadmin);
         } else if (data.event == 'changeContact') {
             changeContact(data, socket);
         } else if (data.event == 'roomExit') {
@@ -1129,6 +1133,7 @@ process.on('message', function (packet) {
         });
     } else if (data.event == "confirmChangeRoom") {
         checkRoomUsers(data);
+        updateAdminClient(JSON.stringify(data));
     } else if (data.event == "confirmChangeContact") {
         auf_users.forEach((user, key) => {
             if (user.userid == data.userid && typeof io.sockets.connected[key] != 'undefined')
@@ -1140,9 +1145,13 @@ process.on('message', function (packet) {
         bunList.set(data.blockString, data.blockDate);
     } else if (data.event == "userAdd" || data.event == "userSplit" || data.event == "confirmChangeUser" || data.event == "confirmUserMarked") {
         io.sockets.emit('message', JSON.stringify(data));
-    } else if ((data.event == "sendMessage" && data.roomid != "") || (data.event == "atachData" && data.roomid != "") || data.event == "confirmRoomMarked" || data.event == "confirmRoomExit") {
+    } else if ((data.event == "sendMessage" && data.roomid != "") || (data.event == "atachData" && data.roomid != "")) {
         if (typeof io.sockets.adapter.rooms != 'undefined' && typeof io.sockets.adapter.rooms[data.roomid] != 'undefined')
             io.of('/').to(data.roomid).binary(false).emit('message', JSON.stringify(data));
+    } else if ((data.event == "confirmRoomMarked" || data.event == "confirmRoomExit") && typeof io.sockets.adapter.rooms != 'undefined' && typeof io.sockets.adapter.rooms[data.roomid] != 'undefined') {
+        let datastr = JSON.stringify(data);
+        io.of('/').to(data.roomid).binary(false).emit('message', datastr);
+        updateAdminClient(datastr);
     }
 });
 
