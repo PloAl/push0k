@@ -866,7 +866,7 @@ function changeUser(data, admin) {
 }
 
 function newUser(data,socket) {
-    var updusrquery = "INSERT INTO userscat SET refid = $1, number = $2, code = $3, description = $4, usersign = $5, icon = $6, userid = $7::uuid, pwd = $8, tmppwd = $9 changestamp = current_timestamp, marked = false RETURNING changestamp;";
+    var updusrquery = "INSERT INTO userscat (refid, number, code, description, usersign, icon, userid, pwd, tmppwd, changestamp, marked) VALUES ($1, $2, $3, $4, $5, $6, $7::uuid, $8, $9, current_timestamp, false) RETURNING changestamp;";
     var updusrparams = [data.refid, data.number, data.code, decodeURIComponent(data.description), decodeURIComponent(data.sign), data.icon, data.userid, sha256(sha256(data.tmppwd)), data.tmppwd];
 
     pgquery(updusrquery, updusrparams).then(result => {
