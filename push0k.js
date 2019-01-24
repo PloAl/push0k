@@ -55,13 +55,17 @@ function new_uuid() {
     return crypto.randomBytes(16).toString("hex");
 }
 
-async function pgquery(textquery, paramsarr) {
+async function pgquery(textquery, paramsarr, rejectRequired) {
 
     try {
         const result = await pool.query(textquery, paramsarr);
         return result.rows;
     } catch (err) {
-        return caughtErr(err, textquery, paramsarr);
+        if (rejectRequired) {
+            return Promise.reject(err);;
+        } else {
+            return caughtErr(err, textquery, paramsarr);
+        }
     }
 
 }
@@ -208,7 +212,7 @@ function dataDBupdated(data) {
         textquery = "SELECT tmstamp, filename, pg_size_pretty(filesize) as filesize, timems, speedmb, https, nodejsver, socketiover, datatype, upload, pg_size_pretty(diskfilesize) as diskfilesize FROM public.datasend WHERE datatype!=0 AND tmstamp > $1::timestamptz ORDER BY tmstamp ASC;";
     }
     var qmessparams = [data.date];
-    pgquery(textquery, qmessparams).then(resultarr => {
+    pgquery(textquery, qmessparams, true).then(resultarr => {
         if (resultarr.length) {
             io.sockets.connected[data.id].binary(false).emit("message", '{"event": "dataDBupdated", "type": "' + data.type + '","data": "' + Buffer.from(JSON.stringify(resultarr)).toString("base64") + '"}');
         }
@@ -230,7 +234,7 @@ function statistic(data) {
             (SELECT sum(diskfilesize) as atachupsize, max(speedmb) as upspeed FROM public.datasend WHERE datatype!=0 AND upload=true) as atachup, \
             (SELECT sum(diskfilesize) as atachdlsize, max(speedmb) as dlspeed FROM public.datasend WHERE datatype!=0 AND upload=false) as atachdl ";
     var statisticparams = [];
-    pgquery(statisticquery, statisticparams).then(resultarr => {
+    pgquery(statisticquery, statisticparams, true).then(resultarr => {
         if (resultarr.length) {
             let result = resultarr[0];
             io.sockets.connected[data.id].binary(false).emit('message', '{"event": "statistic", "users": ' + result.users + ', "rooms": ' + result.rooms + ',"devices": ' + result.devices + ',"bases": ' + result.bases + ', "datarows": ' + result.datarows + ', "datadelivery": ' + result.datadelivery + ', "datasize": "' + result.datasize + '", "dataspeed": "' + result.dataspeed + '", "messages": ' + result.messages + ', "deliverymes": ' + result.deliverymes + ', "readmes": ' + result.readmes + ', "testmessages": ' + result.testmessages + ', "upsize": "' + result.upsize + '", "upspeed": "' + result.upspeed + '", "dlsize": "' + result.dlsize + '", "dlspeed": "' + result.dlspeed + '"}');
@@ -244,7 +248,7 @@ function testresult(data) {
     INNER JOIN(SELECT mesid, tmstamp as date FROM public.messages WHERE extdata LIKE $1) AS mes ON mes.mesid = notif.mesid) AS notif1, \
     (SELECT count(1) as mescount FROM public.messages WHERE extdata LIKE $1) AS mes1, (SELECT message, extdata, serverid FROM public.messages LEFT JOIN public.connections ON connections.conid = messages.conid WHERE messages.mesid = $1) AS testmes ";
     var statisticparams = [data.testid];
-    pgquery(statisticquery, statisticparams).then(resultarr => {
+    pgquery(statisticquery, statisticparams, true).then(resultarr => {
         if (resultarr.length) {
             let result = resultarr[0];
             io.sockets.connected[data.id].binary(false).emit('message', '{"event": "testResult", "testdata": ' + Buffer.from(JSON.stringify(result)).toString("base64") + '"}');
@@ -255,7 +259,7 @@ function testresult(data) {
 function testresultsave(data) {
     var statisticquery = "INSERT INTO versions (stamptime, userid, typeid, refid, objectstr) VALUES (current_timestamp, $1::uuid, '0c15cf43-c8a2-2a7f-3c53-e2d3a86a0e62'::uuid, $2::uuid, $3) RETURNING *";
     var statisticparams = [data.userid, data.testid, JSON.parse(Buffer.from(data.testresult, 'base64').toString('utf8'))];
-    pgquery(statisticquery, statisticparams).then(resultarr => {
+    pgquery(statisticquery, statisticparams, true).then(resultarr => {
         if (resultarr.length) {
             let result = resultarr[0];
             io.sockets.connected[data.id].binary(false).emit('message', '{"event": "savedTestResult", "testdata": ' + Buffer.from(JSON.stringify(result)).toString("base64") + '"}');
@@ -267,7 +271,7 @@ function testresultsave(data) {
 
 function log(logtype, description, userid, ipadress, usercode) {
     let qparams = [logtype, new_uuid(), description, ipadress, userid, cur_socketid, typeof usercode === 'undefined' ? null : usercode];
-    pgquery("INSERT INTO logs (tmstamp, logtype, logid, description, ipadress, userid, conid, usercode) VALUES (current_timestamp, $1, $2::uuid, $3, $4, $5, $6, $7) RETURNING *", qparams).then(resArr => {
+    pgquery("INSERT INTO logs (tmstamp, logtype, logid, description, ipadress, userid, conid, usercode) VALUES (current_timestamp, $1, $2::uuid, $3, $4, $5, $6, $7) RETURNING *", qparams, true).then(resArr => {
         if (resArr.length) {
             resArr[0].description = encodeURIComponent(resArr[0].description);
             updateAdminClient('{"event":"addLogRow","data":' + JSON.stringify(resArr[0]) + '}');
@@ -292,7 +296,7 @@ process.on('SIGINT', function () {
         process.exit(0);
         return;
     }
-    pgquery("UPDATE connections SET dateoff = current_timestamp, bytesread = subquery.bytesread, byteswrite = subquery.byteswrite FROM (SELECT * FROM ( VALUES " + updatedata.substr(2) + " ) as subquery (conid, userid, bytesread, byteswrite)) as subquery WHERE dateoff IS NULL AND connections.conid = subquery.conid AND connections.userid = subquery.userid::uuid", [])
+    pgquery("UPDATE connections SET dateoff = current_timestamp, bytesread = subquery.bytesread, byteswrite = subquery.byteswrite FROM (SELECT * FROM ( VALUES " + updatedata.substr(2) + " ) as subquery (conid, userid, bytesread, byteswrite)) as subquery WHERE dateoff IS NULL AND connections.conid = subquery.conid AND connections.userid = subquery.userid::uuid", [], true)
     .then(pool.end(), process.exit(0)).catch( pool.end(), process.exit(0));    
 
 });
@@ -617,7 +621,7 @@ function forwardmessage(data, socket){
     SELECT $1, $2::uuid, $3, $4::uuid, $5, message, datatype, extdata, $6, datasize, $7, $8::uuid FROM messages WHERE mesid = $8 RETURNING *";
     var queryparams = [ServerDate, data.userid, (data.destid == '' ? null : data.destid), new_uuid(), (data.roomid == '' ? null : data.roomid), data.devtype, cur_socketid, data.mesid];
 
-    pgquery(querytext, queryparams).then(result => {
+    pgquery(querytext, queryparams, true).then(result => {
         if (result.length) {
             data.event = "sendMessage";
             data.message = encodeURIComponent(result[0].message);
@@ -852,7 +856,7 @@ function changeUser(data, admin) {
         updusrparams.push(sha256(sha256(data.tmppwd)));
     }
 
-    pgquery(updusrquery, updusrparams).then(result => {
+    pgquery(updusrquery, updusrparams, true).then(result => {
         if (result.length) {
             data.event = 'confirmChangeUser';
             data.tmppwd = "";
@@ -869,7 +873,7 @@ function newUser(data,socket) {
     var updusrquery = "INSERT INTO userscat (refid, number, code, description, usersign, icon, userid, pwd, tmppwd, changestamp, marked) VALUES ($1, $2, $3, $4, $5, $6, $7::uuid, $8, $9, current_timestamp, false) RETURNING changestamp;";
     var updusrparams = [data.refid, data.number, data.code, decodeURIComponent(data.description), decodeURIComponent(data.sign), data.icon, data.userid, sha256(sha256(data.tmppwd)), data.tmppwd];
 
-    pgquery(updusrquery, updusrparams).then(result => {
+    pgquery(updusrquery, updusrparams, true).then(result => {
         if (result.length) {
             data.event = 'confirmNewUser';
             data.tmppwd = "";
@@ -898,7 +902,7 @@ function editRoom(data, socket, admin) {
     if (data.event == 'newRoom')
         updroomquery = "INSERT INTO roomscat (description, extdesc, icon, users, userid, refid, code, changestamp) VALUES ( $1, $2, $3, $4,$5::uuid, $6::uuid, $6, current_timestamp) RETURNING changestamp;";
     var updroomparams = [decodeURIComponent(data.name), decodeURIComponent(data.description), data.icon, JSON.stringify(data.users), data.userid, data.roomid];
-    pgquery(updroomquery, updroomparams).then(result => {
+    pgquery(updroomquery, updroomparams, true).then(result => {
         if (result.length) {
             data.event = 'confirmChangeRoom';
             data.id = data.id.substring(0,6);
@@ -915,7 +919,7 @@ function changeContact(data, socket) {
     var updquerytext = "UPDATE users_contacts SET description = $3, changestamp = current_timestamp, blocknotifications = $4, blockmessages = $5 \
                 WHERE userid = $1::uuid AND contactid = $2::uuid AND (description != $3 OR blocknotifications != $4 OR blockmessages != $5) RETURNING changestamp;";
     var updqueryparams = [data.userid, data.contactid, decodeURIComponent(data.description), data.blocknotifications, data.blockmessages];
-    pgquery(updquerytext, updqueryparams).then(result => {
+    pgquery(updquerytext, updqueryparams, true).then(result => {
         if (result.length) {
             data.event = 'confirmChangeContact';
             data.changestamp = result[0].changestamp;
@@ -931,7 +935,7 @@ function changeContact(data, socket) {
 
 function roomExit(data, socket) {
     var roomexquery = "SELECT users FROM roomscat WHERE refid = $1::uuid AND $2::uuid IN (SELECT userid FROM users_roomscat WHERE refid = $1::uuid AND userid = $2::uuid);";
-    pgquery(roomexquery, [data.roomid, data.userid]).then(result => {
+    pgquery(roomexquery, [data.roomid, data.userid], true).then(result => {
         if (!result.length) {
             return caughtErr('Ошибка  roomExit query', "Не найдена комната", roomexquery + "   " + data.roomid);
         }
@@ -953,7 +957,7 @@ function roomExit(data, socket) {
 
 function roomMarked(data, admin) {
     var roommarkquery = "UPDATE roomscat SET marked = $3, userid = $2::uuid  WHERE refid = $1::uuid " + (admin ? "" : "AND $2::uuid IN (SELECT userid FROM users_roomscat WHERE refid = $1::uuid AND userid = $2::uuid AND admin)") + " RETURNING changestamp;";
-    pgquery(roommarkquery, [data.roomid, data.userid, data.mark]).then(result => {
+    pgquery(roommarkquery, [data.roomid, data.userid, data.mark], true).then(result => {
         if (result.length) {
             data.event = 'confirmRoomMarked';
             data.id = data.id.substring(0,6);
@@ -968,7 +972,7 @@ function roomMarked(data, admin) {
 
 function userMarked(data) {
     var usermarkquery = "UPDATE userscat SET marked = $3, userid = $2::uuid WHERE refid = $1::uuid RETURNING changestamp;";
-    pgquery(usermarkquery, [data.refid,data.userid,data.mark]).then(result => {
+    pgquery(usermarkquery, [data.refid,data.userid,data.mark], true).then(result => {
         if (result.length) {
             data.event = 'confirmUserMarked';
             data.id = data.id.substring(0,6);
@@ -1103,7 +1107,7 @@ io.sockets.on('connection', (socket) => {
 
         let user = auf_users.get(socket.id);
         var useridoff = user.userid;
-        pgquery("UPDATE connections SET dateoff = current_timestamp, bytesread = $3, byteswrite = $4 WHERE dateoff IS NULL AND conid = $1 AND userid = $2::uuid RETURNING pg_size_pretty(bytesread) as bytesread, pg_size_pretty(byteswrite) as byteswrite", [socket.id, useridoff, socket.request.client.bytesRead, socket.request.client.bytesWritten]).then(resultarr => {
+        pgquery("UPDATE connections SET dateoff = current_timestamp, bytesread = $3, byteswrite = $4 WHERE dateoff IS NULL AND conid = $1 AND userid = $2::uuid RETURNING pg_size_pretty(bytesread) as bytesread, pg_size_pretty(byteswrite) as byteswrite", [socket.id, useridoff, socket.request.client.bytesRead, socket.request.client.bytesWritten], true).then(resultarr => {
             if (resultarr.length) {
                 updateAdminClient('{"event":"updateDisconnect","conid":"' + socket.id + '", "userid": "' + useridoff + '", "bytesread": "' + resultarr[0].bytesread + '", "byteswrite": "' + resultarr[0].byteswrite + '"}');
                 sendAnotherProcess({"event": "updateDisconnect","conid": socket.id, "userid": useridoff, "bytesread": resultarr[0].bytesread, "byteswrite": resultarr[0].byteswrite});
