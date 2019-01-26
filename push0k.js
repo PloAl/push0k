@@ -146,7 +146,7 @@ function datasinc(data) {
 function dataDB(data) {
 
     var usersquery = "SELECT refid, marked, number, description, usersign, tmppwd, icon, userid, changestamp, code FROM public.userscat";
-    var roomsquery = "SELECT refid, marked, code, description, icon, extdesc, roomtype, changestamp, users FROM public.roomscat";
+    var roomsquery = "SELECT refid, marked, code, description, icon, extdesc, roomtype, userid, changestamp, users FROM public.roomscat";
     var basesquery = "SELECT refid, description, baseref, baseversion, code, marked, userid, changestamp FROM public.basescat;";
     var devicesquery = "SELECT refid, marked, code, description, platformtype, osversion, appversion, useragentinformation, processor, memory, servercore, servercpufrequency, servercpu, userid, changestamp, senderid	FROM public.devicecat;";
     var logsquery = "SELECT * FROM (SELECT logid, logtype, tmstamp, description, ipadress, userid, conid FROM public.logs ORDER BY tmstamp DESC LIMIT 300) as lastlogs ORDER BY tmstamp ASC;";
@@ -358,27 +358,25 @@ function saveuserdev(clientid, ostype, osversion, appversion, proc, ram, compnam
 
 }
 
-function findUser(roomUsers, userid) {
-    for (let i = 0; i < roomUsers.length; i++) {
-        if (roomUsers[i].userid == userid)
-            return true;
-    }
-    return false;
-}
-
 function checkRoomUsers(dataRoom) {
+    let newRoom = dataRoom.event === 'confirmNewRoom';
     auf_users.forEach((user, key) => {
-        if (typeof io.sockets.connected[key] != 'undefined' && !(data.roomid in io.sockets.connected[key].rooms) && findUser(dataRoom.users, user.userid)) {
+        let userInRoom = !!~dataRoom.users.findIndex(usr => usr.userid === user.userid);
+        let roomJoined = data.roomid in io.sockets.connected[key].rooms;
+        let userConnected = typeof io.sockets.connected[key] != 'undefined';
+        if (!roomJoined && !userInRoom || !userConnected) {
+            continue;
+        }
+        if (userConnected && !roomJoined && userInRoom) {
             io.sockets.connected[key].join(data.roomid);
-            dataRoom.event = dataRoom.event + 'Join';
-            io.sockets.connected[key].binary(false).emit('message', JSON.stringify(dataRoom));
-        } else if (typeof io.sockets.connected[key] != 'undefined' && data.roomid in io.sockets.connected[key].rooms && !(findUser(dataRoom.users, user.userid))) {
+            dataRoom.event = 'confirmChangeRoomJoin';
+        } else if (userConnected && roomJoined && !userInRoom && !newRoom) {
             io.sockets.connected[key].leave(data.roomid);
-            dataRoom.event = dataRoom.event + 'Leave';
-            io.sockets.connected[key].binary(false).emit('message', JSON.stringify(dataRoom));
-        } else if (typeof io.sockets.connected[key] != 'undefined' && data.roomid in io.sockets.connected[key].rooms)
-            io.sockets.connected[key].binary(false).emit('message', JSON.stringify(dataRoom));
+            dataRoom.event = 'confirmChangeRoomLeave';
+        }
+        io.sockets.connected[key].binary(false).emit('message', JSON.stringify(dataRoom));
     });
+    dataRoom.event = newRoom ? 'confirmNewRoom' : 'confirmChangeRoom';
 }
 
 function sendAnotherProcess(data) {
@@ -904,9 +902,8 @@ function editRoom(data, socket, admin) {
     var updroomparams = [decodeURIComponent(data.name), decodeURIComponent(data.description), data.icon, JSON.stringify(data.users), data.userid, data.roomid];
     pgquery(updroomquery, updroomparams, true).then(result => {
         if (result.length) {
-            data.event = 'confirmChangeRoom';
+            data.event = data.event === 'newRoom' ? 'confirmNewRoom' : 'confirmChangeRoom';
             data.id = data.id.substring(0,6);
-            data.marked = false;
             data.changestamp = result[0].changestamp;
             checkRoomUsers(data);
             updateAdminClient(JSON.stringify(data));
@@ -1135,7 +1132,7 @@ process.on('message', function (packet) {
             if ((user.userid == data.userid || user.userid == data.destid) && typeof io.sockets.connected[key] != 'undefined')
                 io.sockets.connected[key].binary(false).emit('message', JSON.stringify(data));
         });
-    } else if (data.event == "confirmChangeRoom") {
+    } else if (data.event == "confirmChangeRoom" || data.event == "confirmNewRoom") {
         checkRoomUsers(data);
         updateAdminClient(JSON.stringify(data));
     } else if (data.event == "confirmChangeContact") {
