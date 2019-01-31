@@ -16,6 +16,24 @@ SET client_min_messages = warning;
 SET escape_string_warning = off;
 SET row_security = off;
 
+
+CREATE DATABASE push0k WITH TEMPLATE = template0 ENCODING = 'UTF8' LC_COLLATE = 'ru_RU.UTF-8' LC_CTYPE = 'ru_RU.UTF-8';
+
+
+ALTER DATABASE push0k OWNER TO postgres;
+
+\connect push0k
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = off;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+SET escape_string_warning = off;
+SET row_security = off;
 --
 -- Name: add_users_contact(); Type: FUNCTION; Schema: public; Owner: postgres
 --
