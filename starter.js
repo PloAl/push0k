@@ -133,7 +133,6 @@ function getProcessInfo(processList) {
 
 async function startServer(data,client,release,res,userid,result,ip) {
     data.config.catalog = process.cwd();
-    data.config.aport = config.aport;
     config = data.config;
     var args = "";
     if (config.debug)
