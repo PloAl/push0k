@@ -246,25 +246,25 @@ function testresult(data) {
     var statisticquery = "SELECT EXTRACT(epoch FROM alldelivery/notifycount) as deliveryavg, EXTRACT(epoch FROM maxdelivery) as deliverymax, EXTRACT(epoch FROM mindelivery) as deliverymin, EXTRACT(epoch FROM maxmesdate-minmesdate) as mestime, EXTRACT(epoch FROM maxwritedate-mindeliverytime) as notifytime,EXTRACT(epoch FROM maxdeliverydate-minmesdate) as totaltime,EXTRACT(epoch FROM maxwritedate-minmesdate) as pgtime, maxdeliverydate, minmesdate, maxwritedate, mes1.mescount as mescount, notifycount, deliverycount, testmes.extdata as testdata, testmes.serverid as serverid, testmes.message as message FROM \
     (SELECT SUM(tmstamp - mes.date) AS alldelivery, MAX(tmstamp - mes.date) AS maxdelivery, MIN(tmstamp - mes.date) AS mindelivery, MAX(mes.date) AS maxmesdate, MIN(mes.date) AS minmesdate, MIN(tmstamp) AS mindeliverytime, MAX(tmstamp) AS maxwritedate, MAX(tmstamp) AS maxdeliverydate, count(1) as notifycount, count(1) as deliverycount FROM public.notifications as notif \
     INNER JOIN(SELECT mesid, tmstamp as date FROM public.messages WHERE extdata LIKE $1) AS mes ON mes.mesid = notif.mesid) AS notif1, \
-    (SELECT count(1) as mescount FROM public.messages WHERE extdata LIKE $1) AS mes1, (SELECT message, extdata, serverid FROM public.messages LEFT JOIN public.connections ON connections.conid = messages.conid WHERE messages.mesid = $1) AS testmes ";
+    (SELECT count(1) as mescount FROM public.messages WHERE extdata LIKE $1) AS mes1, (SELECT message, extdata, serverid FROM public.messages LEFT JOIN public.connections ON connections.conid = messages.conid WHERE messages.mesid = $1::uuid) AS testmes ";
     var statisticparams = [data.testid];
     pgquery(statisticquery, statisticparams, true).then(resultarr => {
         if (resultarr.length) {
             let result = resultarr[0];
-            io.sockets.connected[data.id].binary(false).emit('message', '{"event": "testResult", "testdata": ' + Buffer.from(JSON.stringify(result)).toString("base64") + '"}');
+            io.sockets.connected[data.id].binary(false).emit('message', '{"event": "testResult", "testdata": "' + Buffer.from(JSON.stringify(result)).toString("base64") + '"}');
         }
     }).catch(err => { caughtErr('Error executing testresult query', err.stack, statisticquery + "   " + JSON.stringify(statisticparams)); });
 }
 
 function testresultsave(data) {
     var statisticquery = "INSERT INTO versions (stamptime, userid, typeid, refid, objectstr) VALUES (current_timestamp, $1::uuid, '0c15cf43-c8a2-2a7f-3c53-e2d3a86a0e62'::uuid, $2::uuid, $3) RETURNING *";
-    var statisticparams = [data.userid, data.testid, JSON.parse(Buffer.from(data.testresult, 'base64').toString('utf8'))];
+    var statisticparams = [data.userid, data.testid, Buffer.from(data.testresult, 'base64').toString('utf8')];
     pgquery(statisticquery, statisticparams, true).then(resultarr => {
         if (resultarr.length) {
             let result = resultarr[0];
-            io.sockets.connected[data.id].binary(false).emit('message', '{"event": "savedTestResult", "testdata": ' + Buffer.from(JSON.stringify(result)).toString("base64") + '"}');
-            pgquery("DELETE FROM notifications WHERE mesid IN(SELECT mesid FROM messages WHERE datatype=6 AND extdata=1$::uuid)", [data.testid]);
-            pgquery("DELETE mesid FROM messages WHERE datatype=6 AND extdata=1$::uuid", [data.testid]);
+            io.sockets.connected[data.id].binary(false).emit('message', '{"event": "savedTestResult", "testdata": "' + Buffer.from(JSON.stringify(result)).toString("base64") + '"}');
+            pgquery("DELETE FROM notifications WHERE mesid IN(SELECT mesid FROM messages WHERE datatype=6 AND extdata LIKE $1)", [data.testid]);
+            pgquery("DELETE FROM messages WHERE datatype=6 AND extdata LIKE $1", [data.testid]);
         }
     }).catch(err => { caughtErr('Error executing testresult query', err.stack, statisticquery + "   " + JSON.stringify(statisticparams)); });
 }
