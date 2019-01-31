@@ -1,17 +1,17 @@
 var config = {
 	"port": 2016,
-	"https": true,
-    "rejectUnauthorized": true,
-    "key": "privkey_.pem",
-    "cert": "cert_.pem",
-    "ca": "chain_.pem",
-    "hostname": "push0k.ru",
+	"https": false,
+    "rejectUnauthorized": false,
+    "key": "",
+    "cert": "",
+    "ca": "",
+    "hostname": "",
 	"pgconf": {
         "user": "postgres",
-        "host": "192.168.0.10",
+        "host": "127.0.0.1",
         "database": "push0k",
-        "password": "postgresghj",
-        "port": 5444
+        "password": "YourPassword",
+        "port": 5432
     }
 };
 module.exports = config;
