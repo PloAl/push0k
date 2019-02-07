@@ -71,6 +71,9 @@ async function pgquery(textquery, paramsarr, rejectRequired) {
 }
 
 function caughtErr(description, err, errobj) {
+    if (errobj.length > 2048) {
+        errobj = errobj.substr(0,2048);
+    }
     if (config.writelogerrfiles) {
         console.error(JSON.stringify({message: description + err + errobj, timestamp: new Date(), type: 'err', process_id: process.env.NODE_APP_INSTANCE, app_name: 'push0k'}));
     }
@@ -845,25 +848,24 @@ function changeUser(data, admin) {
                 WHERE refid = $3::uuid AND (usersign != $1 OR icon != $2) RETURNING changestamp;";
     var updusrparams = [decodeURIComponent(data.sign), data.icon, data.userid];
     if (admin) {
-        updusrquery.replace('refid = $3', 'refid = $4');
+        updusrquery = updusrquery.replace('refid = $3', 'refid = $4');
         updusrparams.push(data.refid);
     }
     if (admin && data.tmppwd !== '') {
-        updusrquery.replace('userid = $3::uuid,', 'userid = $3::uuid, tmppwd = $5, pwd = $6,');
+        updusrquery = updusrquery.replace('userid = $3::uuid,', 'userid = $3::uuid, tmppwd = $5, pwd = $6,').replace('AND (usersign != $1 OR icon != $2) ', '');
         updusrparams.push(data.tmppwd);
         updusrparams.push(sha256(sha256(data.tmppwd)));
     }
 
     pgquery(updusrquery, updusrparams, true).then(result => {
         if (result.length) {
-            data.event = 'confirmChangeUser';
-            data.tmppwd = "";
-            data.id = data.id.substring(0,6);
             data.changestamp = result[0].changestamp;
-            io.sockets.binary(false).emit('message', JSON.stringify(data));
-            // socket.binary(false).emit('message', JSON.stringify(data));
-            sendAnotherProcess(data);
         }
+        data.event = 'confirmChangeUser';
+        data.tmppwd = "";
+        data.id = data.id.substring(0,6);
+        io.sockets.binary(false).emit('message', JSON.stringify(data));
+        sendAnotherProcess(data);
     }).catch(err => { caughtErr('Error executing changeUser query', err.stack, updusrquery + "   " + JSON.stringify(updusrparams)); });
 }
 
