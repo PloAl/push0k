@@ -136,12 +136,23 @@ function datasinc(data) {
         let user = auf_users.get(cur_socketid);
         var dataid = new_uuid();
         var curDate = new Date();
-        var resultdata = '{"Users":' + JSON.stringify(qresults[0]) + ',"Rooms": ' + JSON.stringify(qresults[1]) + ',"joinedRooms": ' + JSON.stringify(user.rooms) + ',"Mess": ' + JSON.stringify(qresults[3]) + ',"Cons": ' + JSON.stringify(qresults[2]) + '}';
-        var resultText = '{"event": "datasync", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"messcount": ' + qresults[3].length + ',"conscount": ' + qresults[2].length + ',"data": "' + Buffer.from(resultdata).toString("base64") + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '"}';
-
+        var byteSize = 0;
+        var resultdata = Buffer.from('{"Users":' + JSON.stringify(qresults[0]) + ',"Rooms": ' + JSON.stringify(qresults[1]) + ',"joinedRooms": ' + JSON.stringify(user.rooms) + ',"Mess": ' + JSON.stringify(qresults[3]) + ',"Cons": ' + JSON.stringify(qresults[2]) + '}').toString("base64");
+        if (resultdata.length < config.filepartsize) {
+            var resultText = '{"event": "datasync", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"messcount": ' + qresults[3].length + ',"conscount": ' + qresults[2].length + ',"data": "' + resultdata + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '","dataPart":1,"partsCount":1}';
+            io.sockets.connected[data.id].binary(false).emit("message", resultText);
+            byteSize = resultText.length;
+        } else {
+            let partsCount = Math.floor(resultdata.length / config.filepartsize) + 1;
+            for(let i = 1; i <= partsCount; i++) {
+                let pos = (i-1)*config.filepartsize;
+                var resultText = '{"event": "datasync", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"messcount": ' + qresults[3].length + ',"conscount": ' + qresults[2].length + ',"data": "' + resultdata.substr(pos, config.filepartsize) + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '","dataPart":' + i + ',"partsCount":' + partsCount + '}';
+                io.sockets.connected[data.id].binary(false).emit("message", resultText);
+                byteSize += resultText.length;
+            }
+        }
         var curDateInt = 62135596800000 + Date.now();
-        io.sockets.connected[data.id].binary(false).emit("message", resultText);
-        pgquery("INSERT INTO datasend (dataid, conid, starttime, endtime, timems, tmstamp, https, nodejsver, socketiover, datatype, filesize, serverid, filename) VALUES ($1, $2, $3, 0, 0, $4, $5, $6, $7, 0, $8, $9, '');", [dataid, data.id, curDateInt, curDate, String(config.https ? true : false).toUpperCase(), process.versions.node, socketioVersion, Buffer.byteLength(resultText, 'utf8'), serverId]);
+        pgquery("INSERT INTO datasend (dataid, conid, starttime, endtime, timems, tmstamp, https, nodejsver, socketiover, datatype, filesize, serverid, filename) VALUES ($1, $2, $3, 0, 0, $4, $5, $6, $7, 0, $8, $9, '');", [dataid, data.id, curDateInt, curDate, String(config.https ? true : false).toUpperCase(), process.versions.node, socketioVersion, byteSize, serverId]);
     }).catch(err => { caughtErr("uncaughtException ", err, JSON.stringify(data)); });
 
 }
@@ -185,12 +196,27 @@ function dataDB(data) {
 
         var dataid = new_uuid();
         var curDate = new Date();
+        var byteSize = 0;
         var resultdata = '{"Users":' + JSON.stringify(qresults[0]) + ',"Rooms": ' + JSON.stringify(qresults[1]) + ',"Bases": ' + JSON.stringify(qresults[2]) + ',"Connections": ' + JSON.stringify(qresults[3]) + ',"Logs": ' + JSON.stringify(qresults[4]) + ',"Devices": ' + JSON.stringify(qresults[5]) + ',"Datasend": ' + JSON.stringify(qresults[6]) + ',"Atachments": ' + JSON.stringify(qresults[7]) + ',"Messages": ' + JSON.stringify(qresults[8]) + ',"Tests": ' + JSON.stringify(qresults[9]) + '}';
-        var resultText = '{"event": "dataDB", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"conscount": ' + qresults[3].length + ',"logscount": ' + qresults[4].length + ',"data": "' + Buffer.from(resultdata).toString("base64") + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '"}';
-
+        resultdata = Buffer.from(resultdata).toString("base64");
+        // console.error(Buffer.byteLength(resultdata, 'utf8'));
+        // var resultText = '{"event": "dataDB", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"conscount": ' + qresults[3].length + ',"logscount": ' + qresults[4].length + ',"data": "' + Buffer.from(resultdata).toString("base64") + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '"}';
+        if (resultdata.length < config.filepartsize) {
+            let resultText = '{"event": "dataDB", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"conscount": ' + qresults[3].length + ',"logscount": ' + qresults[4].length + ',"data": "' + resultdata + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '","dataPart":1,"partsCount":1}';
+            io.sockets.connected[data.id].binary(false).emit("message", resultText);
+            byteSize = resultText.length;
+        } else {
+            let partsCount = Math.floor(resultdata.length / config.filepartsize) + 1;
+            for(let i = 1; i <= partsCount; i++) {
+                let pos = (i-1)*config.filepartsize;
+                let resultText = '{"event": "dataDB", "userscount":' + qresults[0].length + ',"roomscount": ' + qresults[1].length + ',"conscount": ' + qresults[3].length + ',"logscount": ' + qresults[4].length + ',"data": "' + resultdata.substr(pos, config.filepartsize) + '","dataid": "' + dataid + '","datesync": "' + curDate.toISOString() + '","dataPart":' + i + ',"partsCount":' + partsCount + '}';
+                io.sockets.connected[data.id].binary(false).emit("message", resultText);
+                byteSize += resultText.length;
+            }
+        }
         var curDateInt = 62135596800000 + Date.now();
-        io.sockets.connected[data.id].binary(false).emit("message", resultText);
-        pgquery("INSERT INTO datasend (dataid, conid, starttime, endtime, timems, tmstamp, https, nodejsver, socketiover, datatype, filesize, serverid, filename) VALUES ($1, $2, $3, 0, 0, $4, $5, $6, $7, 0, $8, $9, '');", [dataid, data.id, curDateInt, curDate, String(config.https ? true : false).toUpperCase(), process.versions.node, socketioVersion, Buffer.byteLength(resultText, 'utf8'), serverId]);
+        // io.sockets.connected[data.id].binary(false).emit("message", resultText);
+        pgquery("INSERT INTO datasend (dataid, conid, starttime, endtime, timems, tmstamp, https, nodejsver, socketiover, datatype, filesize, serverid, filename) VALUES ($1, $2, $3, 0, 0, $4, $5, $6, $7, 0, $8, $9, '');", [dataid, data.id, curDateInt, curDate, String(config.https ? true : false).toUpperCase(), process.versions.node, socketioVersion, byteSize, serverId]);
     }).catch(err => { caughtErr("uncaughtException ", err, JSON.stringify(data)); });
 }
 
